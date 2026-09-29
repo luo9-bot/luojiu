@@ -48,23 +48,6 @@ pub(crate) fn handle_sticker_toggle(hash: &str) -> Response<std::io::Cursor<Vec<
     err(404, "sticker not found")
 }
 
-/// 删除表情包
-pub(crate) fn handle_sticker_delete(hash: &str) -> Response<std::io::Cursor<Vec<u8>>> {
-    let mut store = crate::sticker::store::load_store();
-    let data_dir = crate::config::data_dir();
-    if let Some(idx) = store.stickers.iter().position(|e| e.hash == hash) {
-        let entry = &store.stickers[idx];
-        let full_path = data_dir.join(&entry.path);
-        if full_path.exists() {
-            std::fs::remove_file(&full_path).ok();
-        }
-        store.stickers.remove(idx);
-        crate::sticker::store::save_store(&store);
-        return ok(serde_json::json!({"ok": true}));
-    }
-    err(404, "sticker not found")
-}
-
 /// 服务表情包图片文件
 ///
 /// 1. 优先从注册表中查找哈希对应的路径
@@ -136,54 +119,6 @@ pub(crate) fn handle_sticker_image(hash: &str) -> Response<std::io::Cursor<Vec<u
     err(404, "image not found")
 }
 
-/// 更新表情包标签
-pub(crate) fn handle_sticker_tags(hash: &str, body: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
-    let val: serde_json::Value = match super::parse_json(body) {
-        Ok(v) => v,
-        Err(e) => return super::err(400, &e),
-    };
-    let new_tags: Vec<String> = match val.get("tags").and_then(|v| v.as_array()) {
-        Some(arr) => arr
-            .iter()
-            .filter_map(|v| v.as_str().map(|s| s.trim().to_string()))
-            .filter(|s| !s.is_empty())
-            .collect(),
-        None => return super::err(400, "tags array required"),
-    };
-
-    let mut store = crate::sticker::store::load_store();
-    if let Some(entry) = store.stickers.iter_mut().find(|e| e.hash == hash) {
-        entry.emotions = new_tags.clone();
-        entry.description = new_tags.join(",");
-        crate::sticker::store::save_store(&store);
-        return super::ok(serde_json::json!({"ok": true, "tags": new_tags}));
-    }
-    super::err(404, "sticker not found")
-}
-
-/// 更新表情包 VLM 自然语言描述
-pub(crate) fn handle_sticker_description(
-    hash: &str,
-    body: &[u8],
-) -> Response<std::io::Cursor<Vec<u8>>> {
-    let val: serde_json::Value = match super::parse_json(body) {
-        Ok(v) => v,
-        Err(e) => return super::err(400, &e),
-    };
-    let new_desc = match val.get("description").and_then(|v| v.as_str()) {
-        Some(s) => s.trim().to_string(),
-        None => return super::err(400, "description string required"),
-    };
-
-    let mut store = crate::sticker::store::load_store();
-    if let Some(entry) = store.stickers.iter_mut().find(|e| e.hash == hash) {
-        entry.vlm_description = Some(new_desc.clone());
-        crate::sticker::store::save_store(&store);
-        return super::ok(serde_json::json!({"ok": true, "vlm_description": new_desc}));
-    }
-    super::err(404, "sticker not found")
-}
-
 // ── 仪表盘统计 ────────────────────────────────────────────────
 
 pub(crate) fn handle_dashboard() -> Response<std::io::Cursor<Vec<u8>>> {
@@ -253,41 +188,6 @@ pub(crate) fn handle_memory(
         );
     }
 
-    // POST /api/memory/{user_id}/batch -> 批量删除
-    if *method == Method::Post && segs.len() == 2 && segs[1] == "batch" {
-        let Some(uid) = segs[0].parse().ok() else {
-            return err(400, "invalid user_id");
-        };
-        let body_val: serde_json::Value = match parse_json(body) {
-            Ok(v) => v,
-            Err(e) => return err(400, &e),
-        };
-        let Some(indices) = body_val
-            .get("indices")
-            .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as usize))
-                    .collect::<Vec<_>>()
-            })
-        else {
-            return err(400, "indices required");
-        };
-        let mut mem = store::load_user_memory(uid);
-        let mut sorted = indices;
-        sorted.sort_unstable();
-        sorted.dedup();
-        let mut deleted = 0;
-        for idx in sorted.into_iter().rev() {
-            if idx < mem.entries.len() {
-                mem.entries.remove(idx);
-                deleted += 1;
-            }
-        }
-        store::save_user_memory(uid, &mem);
-        return ok(serde_json::json!({"ok": true, "deleted": deleted}));
-    }
-
     match method {
         Method::Get => {
             // /api/memory -> 完整 store
@@ -332,32 +232,6 @@ pub(crate) fn handle_memory(
                 access_count: 1,
                 emotional_impact: None,
             });
-            store::save_user_memory(uid, &mem);
-            ok(serde_json::json!({"ok": true}))
-        }
-        Method::Put => {
-            let Some(uid) = segs.first().and_then(|s| s.parse::<u64>().ok()) else {
-                return err(400, "invalid user_id");
-            };
-            let Some(idx) = segs.get(1).and_then(|s| s.parse::<usize>().ok()) else {
-                return err(400, "index required");
-            };
-            let body_val: serde_json::Value = match parse_json(body) {
-                Ok(v) => v,
-                Err(e) => return err(400, &e),
-            };
-            let mut mem = store::load_user_memory(uid);
-            let Some(entry) = mem.entries.get_mut(idx) else {
-                return err(404, "index out of range");
-            };
-            if let Some(content) = body_val.get("content").and_then(|v| v.as_str()) {
-                entry.content = content.to_string();
-            }
-            match parse_importance(body_val.get("importance")) {
-                Ok(importance) => entry.importance = importance,
-                Err(_) => return err(400, "invalid importance"),
-            }
-            entry.last_accessed = crate::util::now_secs();
             store::save_user_memory(uid, &mem);
             ok(serde_json::json!({"ok": true}))
         }
@@ -440,31 +314,6 @@ pub(crate) fn handle_working_memory(
                 ok(serde_json::json!({ "groups": view }))
             }
         }
-        Method::Delete => {
-            let gid: u64 = match segs.first().and_then(|s| s.parse().ok()) {
-                Some(g) => g,
-                None => return err(400, "group_id required"),
-            };
-            let idx: usize = match segs.get(1).and_then(|s| s.parse().ok()) {
-                Some(i) => i,
-                None => return err(400, "index required"),
-            };
-            backup::before_modify("working_memory");
-            // 走类型化 store：它负责锁与原子写。
-            // 后台不再自己拼 JSON——`working_memory.json` 是所有群共用的一份文件，
-            // 第二条写路径会与消息线程的读改写互相覆盖。
-            match crate::working_memory::delete_entry_at(gid, idx) {
-                crate::working_memory::DeleteEntryOutcome::Removed => {
-                    ok(serde_json::json!({"ok": true}))
-                }
-                crate::working_memory::DeleteEntryOutcome::GroupNotFound => {
-                    err(404, "group not found")
-                }
-                crate::working_memory::DeleteEntryOutcome::IndexOutOfRange => {
-                    err(404, "index out of range")
-                }
-            }
-        }
         _ => err(405, "method not allowed"),
     }
 }
@@ -474,7 +323,6 @@ pub(crate) fn handle_working_memory(
 pub(crate) fn handle_emotion(
     method: &Method,
     segs: &[&str],
-    body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     match method {
         Method::Get => {
@@ -507,26 +355,6 @@ pub(crate) fn handle_emotion(
             } else {
                 ok(store)
             }
-        }
-        Method::Put => {
-            let uid: u64 = match segs.first().and_then(|s| s.parse().ok()) {
-                Some(u) => u,
-                None => return err(400, "user_id required"),
-            };
-            let body_val: serde_json::Value = match parse_json(body) {
-                Ok(v) => v,
-                Err(e) => return err(400, &e),
-            };
-            backup::before_modify("emotion");
-            // 走类型化 store：锁、原子写、默认值都由它负责。
-            // 后台不再自己拼一份 JSON——那是第二条写路径，会与消息线程
-            // 的读改写互相覆盖。
-            let state: crate::emotion::EmotionState = match serde_json::from_value(body_val) {
-                Ok(state) => state,
-                Err(e) => return err(400, &format!("情绪状态结构校验失败（未写入）: {e}")),
-            };
-            crate::emotion::update_state(uid, state);
-            ok(serde_json::json!({"ok": true}))
         }
         _ => err(405, "method not allowed"),
     }
@@ -666,30 +494,16 @@ pub(crate) fn handle_quota(method: &Method, segs: &[&str]) -> Response<std::io::
     if *method != Method::Get {
         return err(405, "method not allowed");
     }
-    match segs.first() {
-        Some(&"segments") => {
-            if let Some(gid_str) = segs.get(1) {
-                let group_id: u64 = match gid_str.parse() {
-                    Ok(v) => v,
-                    Err(_) => return err(400, "invalid group_id"),
-                };
-                let logs = crate::quota::get_segment_logs(group_id, 20);
-                ok(serde_json::json!({"group_id": group_id, "segments": logs}))
-            } else {
-                let groups = crate::quota::get_groups_with_logs();
-                ok(serde_json::json!({"groups": groups}))
-            }
-        }
-        _ => {
-            // API quota 配置
-            let cfg = &config::get().quota;
-            ok(serde_json::json!({
-                "enabled": cfg.enabled,
-                "segment_minutes": cfg.segment_minutes,
-                "segments": cfg.segments,
-            }))
-        }
+    if !segs.is_empty() {
+        return err(404, "not found");
     }
+    // API quota 配置
+    let cfg = &config::get().quota;
+    ok(serde_json::json!({
+        "enabled": cfg.enabled,
+        "segment_minutes": cfg.segment_minutes,
+        "segments": cfg.segments,
+    }))
 }
 
 // ── 防注入状态管理 ────────────────────────────────────────────────
@@ -732,7 +546,6 @@ pub(crate) fn handle_anti_injection(
             ok(serde_json::json!({
                 "config": {
                     "input": {
-                        "max_message_length": cfg.input.max_message_length,
                         "sensitive_action": cfg.input.sensitive_action,
                     },
                     "output": {
@@ -780,18 +593,6 @@ pub(crate) fn handle_anti_injection(
                         serde_json::json!({"success": true, "message": format!("用户{}信誉已重置", user_id)}),
                     )
                 }
-                "silent-ban" => {
-                    crate::anti_injection::silent_ban_user(user_id);
-                    ok(
-                        serde_json::json!({"success": true, "message": format!("用户{}已静默封禁", user_id)}),
-                    )
-                }
-                "ban" => {
-                    crate::anti_injection::ban_user(user_id);
-                    ok(
-                        serde_json::json!({"success": true, "message": format!("用户{}已完全封禁", user_id)}),
-                    )
-                }
                 _ => err(404, "unknown action"),
             }
         }
@@ -818,36 +619,8 @@ pub(crate) fn handle_config(
             Err(e) => return err(500, &e),
         }
     }
-    // GET /api/config/raw — 返回原始 YAML 文本
-    if *method == Method::Get && segs.first() == Some(&"raw") {
-        let config_path = config::data_dir().join("config.yaml");
-        return match std::fs::read_to_string(&config_path) {
-            Ok(content) => ok(serde_json::json!({"content": content})),
-            Err(_) => err(404, "config.yaml not found"),
-        };
-    }
-    // PUT /api/config/raw — 保存原始 YAML 文本
-    if *method == Method::Put && segs.first() == Some(&"raw") {
-        let body_val: serde_json::Value = match parse_json(body) {
-            Ok(v) => v,
-            Err(e) => return err(400, &e),
-        };
-        let content = match body_val.get("content").and_then(|v| v.as_str()) {
-            Some(c) => c,
-            None => return err(400, "content required"),
-        };
-        // 原文保存也必须先验证它能被解析成 Config：
-        // 只验证"YAML 语法"会放过结构错误，而那正是"配置写得进、插件起不来"。
-        if let Err(e) = serde_yaml::from_str::<config::Config>(content) {
-            return err(400, &format!("配置结构校验失败（未写入）: {e}"));
-        }
-        let config_path = config::data_dir().join("config.yaml");
-        if let Err(e) = crate::util::atomic_write(&config_path, content) {
-            return err(500, &format!("写入失败: {}", e));
-        }
-        return ok(
-            serde_json::json!({"ok": true, "message": "配置已保存，点击「重新载入配置」生效"}),
-        );
+    if !segs.is_empty() {
+        return err(404, "not found");
     }
     // 原有的 config GET/PUT 逻辑
     handle_config_main(method, body)
@@ -977,56 +750,9 @@ pub(crate) fn handle_audit() -> Response<std::io::Cursor<Vec<u8>>> {
 
 // ── 日程计划 ──────────────────────────────────────────────────
 
-pub(crate) fn handle_schedule(method: &Method, body: &[u8]) -> Response<std::io::Cursor<Vec<u8>>> {
-    // POST: 更新计划状态
-    if method == &Method::Post {
-        let body_val: serde_json::Value = match serde_json::from_slice(body) {
-            Ok(v) => v,
-            Err(e) => return err(400, &format!("invalid json: {}", e)),
-        };
-
-        let action = body_val
-            .get("action")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let kind = body_val.get("kind").and_then(|v| v.as_str()).unwrap_or("");
-        let index = body_val.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-
-        match (action, kind) {
-            ("toggle", "day" | "week" | "month") => {
-                let timeframe = match kind {
-                    "day" => crate::schedule::Timeframe::Day,
-                    "week" => crate::schedule::Timeframe::Week,
-                    _ => crate::schedule::Timeframe::Month,
-                };
-                let plan = crate::schedule::plan_of(timeframe);
-                let Some(item) = plan.items.get(index) else {
-                    return err(404, "plan item not found");
-                };
-                // 管理页与她自己走同一条落笔路径，只是判定由人来做
-                match crate::schedule::set_status(&item.id, Some(!item.completed), "", "") {
-                    crate::schedule::SetStatusOutcome::Applied {
-                        id,
-                        content,
-                        completed,
-                    } => {
-                        return ok(serde_json::json!({
-                            "ok": true,
-                            "id": id,
-                            "content": content,
-                            "completed": completed,
-                        }));
-                    }
-                    crate::schedule::SetStatusOutcome::UnknownId => {
-                        return err(404, "plan item not found");
-                    }
-                    crate::schedule::SetStatusOutcome::PersistenceFailed(error) => {
-                        return err(500, &error);
-                    }
-                }
-            }
-            _ => return err(400, "invalid action or kind"),
-        }
+pub(crate) fn handle_schedule(method: &Method) -> Response<std::io::Cursor<Vec<u8>>> {
+    if *method != Method::Get {
+        return err(405, "method not allowed");
     }
 
     // GET: 返回计划数据
@@ -1349,7 +1075,6 @@ fn mind_now() -> serde_json::Value {
 pub(crate) fn handle_mind(
     method: &Method,
     segs: &[&str],
-    body: &[u8],
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     let section = segs.first().copied().unwrap_or("");
     let rest = &segs[1.min(segs.len())..];
@@ -1384,39 +1109,6 @@ pub(crate) fn handle_mind(
                 .collect();
             ok(serde_json::json!({"persons": persons}))
         }
-        (Method::Put, "persons") => {
-            let Some(uid) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
-                return err(400, "invalid user_id");
-            };
-            let parsed: Result<crate::mind::PersonFile, _> = serde_json::from_slice(body);
-            match parsed {
-                Ok(mut file) => {
-                    file.updated_at = crate::util::now_secs();
-                    crate::mind::persons::save(uid, &file);
-                    ok(serde_json::json!({"saved": uid}))
-                }
-                Err(e) => err(400, &format!("bad person file: {e}")),
-            }
-        }
-        (Method::Get, "loops") => {
-            let loops: Vec<serde_json::Value> = crate::mind::wake::all()
-                .iter()
-                .map(|p| {
-                    serde_json::json!({
-                        "id": p.id, "kind": p.kind, "due_at": p.due_at,
-                        "reason": p.reason, "about_user": p.about_user,
-                        "target_group": p.target_group, "target_user": p.target_user,
-                    })
-                })
-                .collect();
-            ok(serde_json::json!({"loops": loops}))
-        }
-        (Method::Delete, "loops") => {
-            let Some(id) = rest.first().and_then(|s| s.parse::<u64>().ok()) else {
-                return err(400, "invalid loop id");
-            };
-            ok(serde_json::json!({"closed": crate::mind::wake::close(id)}))
-        }
         (Method::Get, "security") => {
             ok(serde_json::json!({"events": crate::mind::security::tail(300)}))
         }
@@ -1429,23 +1121,13 @@ pub(crate) fn handle_mind(
                 Err(_) => err(400, "invalid group_id"),
             },
             None => ok(serde_json::json!({
-                "groups": crate::mind::social::known_groups(),
+                "groups": crate::mind::social::known_group_ids(),
             })),
         },
         (Method::Get, "kernel") => match crate::mind::self_model::kernel() {
             Some(k) => ok(serde_json::json!({"kernel": k})),
             None => err(404, "kernel.json 不存在——先在 data/self/kernel.json 创建"),
         },
-        (Method::Put, "kernel") => {
-            let parsed: Result<crate::mind::self_model::Kernel, _> = serde_json::from_slice(body);
-            match parsed {
-                Ok(kernel) => match crate::mind::self_model::save_kernel(&kernel) {
-                    Ok(()) => ok(serde_json::json!({"saved": true})),
-                    Err(e) => err(500, &e),
-                },
-                Err(e) => err(400, &format!("bad kernel: {e}")),
-            }
-        }
         _ => err(404, "not found"),
     }
 }

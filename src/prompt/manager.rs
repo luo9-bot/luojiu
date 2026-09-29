@@ -192,8 +192,6 @@ fn defaults() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
             "../../defaults/task_progress.prompt",
             PREV_TASK_PROGRESS_BEFORE_SELF_LOOP_FIX
         ),
-        tpl!("post_analyze", "../../defaults/post_analyze.prompt"),
-        tpl!("emotion_analyze", "../../defaults/emotion_analyze.prompt"),
         tpl!("crisis_ai_detect", "../../defaults/crisis_ai_detect.prompt"),
         tpl!("memory_review", "../../defaults/memory_review.prompt"),
         tpl!("memory_extract", "../../defaults/memory_extract.prompt"),
@@ -284,18 +282,5 @@ mod tests {
                 assert_ne!(old, current, "模板 {name} 的历史版本与当前版本相同");
             }
         }
-    }
-
-    #[test]
-    fn legacy_snapshots_differ_from_current_versions() {
-        // 历史快照的唯一用途是识别旧文件，与当前版本相同就没有意义
-        assert_ne!(
-            PREV_VOICE_BEFORE_SPEAK_GATE,
-            include_str!("../../defaults/voice.prompt")
-        );
-        assert_ne!(
-            PREV_TASK_PROGRESS_BEFORE_SELF_LOOP_FIX,
-            include_str!("../../defaults/task_progress.prompt")
-        );
     }
 }

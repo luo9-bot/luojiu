@@ -275,7 +275,7 @@ pub(crate) fn process_message(user_id: u64, message: &str) {
         } else if attn.focused_topic.is_empty() {
             attn.focused_topic = ai_message.clone();
         }
-        crate::conversation::attention::update_attention(&mut attn, user_id, true);
+        crate::conversation::attention::update_attention(&mut attn, user_id);
         crate::conversation::attention::save_attention(&attn);
     }
 
@@ -347,7 +347,7 @@ fn finish_private_reply(user_id: u64, user_message: &str, reply: &str) {
         crate::social_battery::save(&battery);
     }
 
-    crate::person_info::relationship::record_interaction(user_id, true);
+    crate::person_info::relationship::record_interaction(user_id);
     crate::reply_effect::record_reply(0, user_id, reply, None);
     crate::working_memory::mark_replied(0, user_id);
     crate::activity::check_bot_message(user_id, reply);
@@ -423,7 +423,6 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
     let self_qq = cfg.self_qq;
 
     // ── 危机消息强制回应（绕过配额与沉默冷却） ──
-    let mut forced_users: Vec<u64> = Vec::new();
     let mut crisis_utterances: Vec<GroupUtterance> = Vec::new();
 
     for batch in user_msgs {
@@ -449,7 +448,6 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
                 ts: batch.first_arrival(),
                 ts_ms: batch.sort_key_ms(),
             });
-            forced_users.push(*user_id);
         }
     }
 
@@ -474,31 +472,23 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
     }
 
     // ── 剩余消息 ──
-    let remaining: Vec<&GroupBatch> = user_msgs
-        .iter()
-        .filter(|batch| !forced_users.contains(&batch.user_id))
-        .collect();
-    if remaining.is_empty() {
+    if user_msgs.is_empty() {
         return;
     }
 
-    // ── 配额记账 ──
-    for batch in &remaining {
-        crate::quota::log_segment_message(group_id, batch.user_id, &batch.taken.messages);
-    }
-
+    // ── 本批消息的 @ 判定 ──
     let at_pattern = if self_qq > 0 {
         format!("[CQ:at,qq={self_qq}]")
     } else {
         String::new()
     };
-    let joined: String = remaining
+    let joined: String = user_msgs
         .iter()
         .map(|batch| batch.taken.messages.as_str())
         .collect::<Vec<_>>()
         .join("\n");
     let addressed = !at_pattern.is_empty()
-        && remaining
+        && user_msgs
             .iter()
             .any(|batch| batch.taken.messages.contains(&at_pattern));
 
@@ -507,7 +497,7 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
     if !quota_available {
         let bypass = crate::quota::try_reply(
             group_id,
-            remaining[0].user_id,
+            user_msgs[0].user_id,
             &joined,
             &at_pattern,
             cfg.darling_qq,
@@ -520,7 +510,7 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
 
     // 沉默冷却的判定放在轮次焦点之后（见下）——被点名时冷却不能挡
 
-    let utterances: Vec<GroupUtterance> = remaining
+    let utterances: Vec<GroupUtterance> = user_msgs
         .iter()
         .map(|batch| GroupUtterance {
             user_id: batch.user_id,
@@ -540,22 +530,6 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
         })
         .collect();
     record_group_history(group_id, &utterances, cfg.conversation.max_history);
-
-    // 群级现场在沉默冷却和表达决策前记录，下一轮才能接住她错过的上下文。
-    for u in &utterances {
-        let text_only = crate::vision::strip_image_cq(&u.text);
-        let stored = if text_only.is_empty() { u.text.clone() } else { text_only };
-        let name = crate::person_info::get_display_name(u.user_id, group_id)
-            .unwrap_or_else(|| "群友".to_string());
-        with_shared_state(|s| {
-            s.push_group_history(
-                group_id,
-                "user",
-                &format!("[{name}] {stored}"),
-                cfg.conversation.max_history,
-            );
-        });
-    }
 
     // 轮次焦点：这批消息在跟谁说话（确定性判定，只用 @ / 名字 / 跟进关系）。
     // 回复目标由这里定，而不是"哪个用户的批次先到期"——批次是按
@@ -589,7 +563,7 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
 
     // ── 表达学习：从群聊消息中学习语言风格（后台） ──
     if crate::learner::should_learn(group_id) {
-        let learn_msgs: Vec<(u64, String)> = remaining
+        let learn_msgs: Vec<(u64, String)> = user_msgs
             .iter()
             .map(|batch| (batch.user_id, batch.taken.messages.clone()))
             .collect();
@@ -742,7 +716,7 @@ fn speak_and_deliver_group(
         } else if attn.focused_topic.is_empty() {
             attn.focused_topic = joined.clone();
         }
-        crate::conversation::attention::update_attention(&mut attn, primary, true);
+        crate::conversation::attention::update_attention(&mut attn, primary);
         crate::conversation::attention::save_attention(&attn);
     }
 
@@ -841,19 +815,14 @@ fn finish_group_reply(group_id: u64, primary: u64, utterances: &[GroupUtterance]
     }
 
     for u in utterances {
-        crate::person_info::relationship::record_interaction(u.user_id, true);
+        crate::person_info::relationship::record_interaction(u.user_id);
         crate::working_memory::mark_replied(group_id, u.user_id);
     }
 
     // ── 训练数据留档：(触发, 回复) 配对——离线风格学习的监督信号 ──
     // 行 id 传给回复效果追踪：ASI 定稿后 reward 精确写回这一行
-    let trigger: String = utterances
-        .iter()
-        .map(|u| u.text.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
     let archive_reply_id =
-        crate::mind::archive::record_reply(group_id, primary, &trigger, reply, false);
+        crate::mind::archive::record_reply(group_id, primary, &incoming, reply, false);
 
     // ── 社会世界模型：她的话挂进最热线程——
     //    她下一眼能看见自己刚说过什么，并由此开始观察有没有人接她的话 ──

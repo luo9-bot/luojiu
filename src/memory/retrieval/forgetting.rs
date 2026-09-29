@@ -34,18 +34,6 @@ pub(crate) struct ForgettingConfig {
     pub reinforcement_gain: f64,
 }
 
-impl Default for ForgettingConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            half_life_secs: 14.0 * 86400.0,
-            time_weight: 0.2,
-            similarity_weight: 1.2,
-            reinforcement_gain: 0.5,
-        }
-    }
-}
-
 /// 无状态保留率：距上次想起 `elapsed` 秒后还记得多少（0~1]
 pub(crate) fn retention(elapsed_secs: f64, half_life_secs: f64) -> f64 {
     if half_life_secs <= 0.0 || !half_life_secs.is_finite() {
@@ -97,7 +85,13 @@ mod tests {
     use super::*;
 
     fn cfg() -> ForgettingConfig {
-        ForgettingConfig::default()
+        ForgettingConfig {
+            enabled: true,
+            half_life_secs: 14.0 * 86400.0,
+            time_weight: 0.2,
+            similarity_weight: 1.2,
+            reinforcement_gain: 0.5,
+        }
     }
 
     #[test]

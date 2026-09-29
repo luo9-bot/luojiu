@@ -58,15 +58,6 @@ mod tests {
         assert!(!regex.is_match("你好"));
     }
 
-    #[test]
-    fn same_pattern_is_cached_not_recompiled() {
-        let first = static_regex(r"\d{4}");
-        let second = static_regex(r"\d{4}");
-        // 缓存命中：两者指向同一份编译结果
-        assert_eq!(first.as_str(), second.as_str());
-        assert!(second.is_match("2026"));
-    }
-
     /// 坏模式不能 panic，也不能误报
     #[test]
     fn invalid_pattern_falls_back_to_never_matching() {

@@ -151,11 +151,6 @@ pub(crate) struct Participant {
     /// 最近一次发言（unix 秒）
     #[serde(default)]
     pub last_seen: u64,
-    /// 最近一次发言所在线程 id
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_topic: Option<usize>,
-    #[serde(default)]
-    pub msg_count: u64,
 }
 
 /// 一个话题线程：一条并行展开的对话线
@@ -201,7 +196,6 @@ pub(crate) struct Question {
     pub from: u64,
     /// 原文（≤60 字，保留 @ 码以判断是否指向她）
     pub text: String,
-    pub at: u64,
 }
 
 /// 她最近一次开口的踪迹
@@ -419,13 +413,12 @@ pub(crate) fn observe_event(
     p.attention = decay_value(p.attention, ts.saturating_sub(p.last_seen));
     p.attention = (p.attention + signal).clamp(0.0, 1.0);
     p.last_seen = ts;
-    p.msg_count += 1;
 
     // 纯噪声（哈哈哈、纯表情、[图片]）：是社交出席，但不携带话题信息。
     // 只更新注意力与被忽略感，不进线程模型——避免垃圾线程碎片化。
     let text_core = text.replace("[图片]", "");
     let core_chars = content_char_count(&text_core);
-    let called_her = names_bot(text, bot_name) || ats_bot(text, self_qq);
+    let called_her = called_her(ctx, text);
     if core_chars == 0 && !called_her && !is_question(&text_core) {
         note_engagement(state, user_id, None, ctx, text, ts);
         return;
@@ -483,7 +476,7 @@ pub(crate) fn observe_event(
         .clone()
         .unwrap_or_else(|| user_id.to_string());
 
-    let touched: Option<usize> = match joined {
+    match joined {
         Some((id, push_line)) => {
             // ── 3. 归入/挂靠既有线程 ──
             let Some(thread) = state.topics.iter_mut().find(|t| t.id == id) else {
@@ -536,12 +529,10 @@ pub(crate) fn observe_event(
             thread.last_speaker = Some(user_id);
             thread.last_msg_at = Some(ts);
             note_engagement(state, user_id, Some(id), ctx, text, ts);
-            Some(id)
         }
         None if short_reply => {
             // 短回复但无线可依：只算出席
             note_engagement(state, user_id, None, ctx, text, ts);
-            None
         }
         None => {
             // ── 4. 新建线程；超出上限时移除最久不活跃的 ──
@@ -573,11 +564,7 @@ pub(crate) fn observe_event(
                 last_msg_at: Some(ts),
             });
             note_engagement(state, user_id, Some(id), ctx, text, ts);
-            Some(id)
         }
-    };
-    if let Some(id) = touched {
-        set_last_topic(state, user_id, id);
     }
 
     // ── 5. 提问检测：本条是否留下一个"有人在等"的提问 ──
@@ -590,7 +577,6 @@ pub(crate) fn observe_event(
         thread.unanswered = Some(Question {
             from: user_id,
             text: clamp_text(&text_core),
-            at: ts,
         });
     }
 }
@@ -621,12 +607,6 @@ fn note_engagement(
 
 fn called_her(ctx: &ObserveCtx, text: &str) -> bool {
     names_bot(text, ctx.bot_name) || ats_bot(text, ctx.self_qq)
-}
-
-fn set_last_topic(state: &mut SocialState, user_id: u64, id: usize) {
-    if let Some(p) = state.participants.get_mut(&user_id) {
-        p.last_topic = Some(id);
-    }
 }
 
 fn push_transcript(transcript: &mut Vec<TranscriptLine>, line: TranscriptLine) {
@@ -1051,13 +1031,8 @@ pub(crate) fn state_for_admin(group_id: u64) -> SocialState {
     with_state(group_id, |state| state.clone())
 }
 
-/// admin API：已有社会状态的群列表（内存态 + 磁盘文件）
-pub(crate) fn known_groups() -> Vec<u64> {
-    known_group_ids()
-}
-
 /// 磁盘上已有社会状态文件的群（含本进程未加载的）
-fn known_group_ids() -> Vec<u64> {
+pub(crate) fn known_group_ids() -> Vec<u64> {
     let mut ids: Vec<u64> = {
         let _lock = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let states = STATES.lock().unwrap_or_else(|e| e.into_inner());

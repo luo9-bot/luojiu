@@ -35,8 +35,6 @@ pub(crate) struct SocialBattery {
     pub last_update: u64,
     /// 连续活跃分钟数
     pub active_minutes: u32,
-    /// 最后一次主动回复时间
-    pub last_active_reply: u64,
     /// 倦怠触发次数（用于延长恢复）
     pub burnout_count: u32,
 }
@@ -56,7 +54,6 @@ impl Default for SocialBattery {
             emotion_drain_modifier: 1.0,
             last_update: crate::util::now_secs(),
             active_minutes: 0,
-            last_active_reply: 0,
             burnout_count: 0,
         }
     }
@@ -158,7 +155,6 @@ pub(crate) fn record_active_reply(battery: &mut SocialBattery) {
     battery.level = (battery.level - drain).max(0.0);
     battery.is_passive_mode = false;
     battery.active_minutes += 1;
-    battery.last_active_reply = crate::util::now_secs();
 
     debug!(
         level = battery.level,

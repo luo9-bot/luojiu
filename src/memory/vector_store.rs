@@ -4,7 +4,6 @@
 //!
 //! 特性：
 //! - SQ8 标量量化（float32 → int8，min-max 映射）
-//! - SHA1 稳定的 int64 ID
 //! - Flat 回退索引（SQ8 训练完成前使用）
 //! - 渐进训练（储水池采样）
 //! - Append-only 磁盘存储
@@ -18,7 +17,6 @@ use tracing::{debug, warn};
 
 use super::embedding::l2_normalize;
 use crate::util::MutexExt;
-use sha1::Digest;
 
 // ── 文件格式 v2 ─────────────────────────────────────────────────
 // [magic: u32 = 0x56435452] ("VCTR")
@@ -102,8 +100,6 @@ pub(crate) struct VectorStore {
     dim: usize,
     trained: bool,
     quant_params: Option<QuantParams>,
-    /// 主索引：int64 ID -> content
-    id_to_content: HashMap<i64, String>,
     /// content -> 原始向量（仅在未训练时使用，训练后清空以节省内存）
     raw_vectors: HashMap<String, Vec<f32>>,
     /// 量化后的向量（SQ8训练完成后使用，训练后是唯一的向量存储）
@@ -111,8 +107,8 @@ pub(crate) struct VectorStore {
     /// 储水池（渐进训练用）
     reservoir: Vec<Vec<f32>>,
     reservoir_seen: usize,
-    /// 写缓冲区
-    write_buffer: Vec<(i64, String, Vec<f32>)>,
+    /// 待落盘的写入计数（触发 save_to_disk）
+    pending_writes: usize,
     /// 统计
     total_added: usize,
 }
@@ -123,25 +119,13 @@ impl VectorStore {
             dim,
             trained: false,
             quant_params: None,
-            id_to_content: HashMap::new(),
             raw_vectors: HashMap::new(),
             quantized_vectors: HashMap::new(),
             reservoir: Vec::with_capacity(RESERVOIR_CAPACITY),
             reservoir_seen: 0,
-            write_buffer: Vec::with_capacity(BUFFER_SIZE),
+            pending_writes: 0,
             total_added: 0,
         }
-    }
-
-    /// 从 content 生成稳定的 int64 ID (SHA1 截断)
-    fn generate_id(content: &str) -> i64 {
-        let mut hasher = sha1::Sha1::new();
-        hasher.update(content.as_bytes());
-        let bytes = hasher.finalize();
-        let val = i64::from_le_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ]);
-        val & 0x7FFFFFFFFFFFFFFF
     }
 
     /// 添加向量（以 content 为唯一键）
@@ -155,7 +139,6 @@ impl VectorStore {
             return false;
         }
 
-        let id = Self::generate_id(content);
         let mut vec = vector;
         l2_normalize(&mut vec);
 
@@ -173,13 +156,11 @@ impl VectorStore {
             } else {
                 self.raw_vectors.insert(content.to_string(), vec.clone());
             }
-            self.id_to_content.insert(id, content.to_string());
             return true;
         }
 
         // 新向量
         self.total_added += 1;
-        self.id_to_content.insert(id, content.to_string());
 
         if self.trained {
             // 已训练，直接量化存储
@@ -192,9 +173,8 @@ impl VectorStore {
             self.raw_vectors.insert(content.to_string(), vec.clone());
         }
 
-        // 写缓冲区
-        self.write_buffer
-            .push((id, content.to_string(), vec.clone()));
+        // 待落盘计数
+        self.pending_writes += 1;
 
         // 储水池采样
         self.reservoir_seen += 1;
@@ -237,25 +217,16 @@ impl VectorStore {
         // 释放储水池（训练完成后不再需要）
         self.reservoir.clear();
         self.reservoir.shrink_to_fit();
-        // 注意：不清空 write_buffer，保留当前批次的写入记录
-        // write_buffer 用于触发 save_to_disk，清空会导致数据丢失
         self.trained = true;
         debug!(
             vectors = raw_count,
             dim = self.dim,
-            "vector_store: SQ8 training completed, raw vectors/reservoir/buffer released"
+            "vector_store: SQ8 training completed, raw vectors/reservoir released"
         );
     }
 
     /// 移除向量
     fn remove(&mut self, content: &str) {
-        if let Some(id) = self
-            .id_to_content
-            .iter()
-            .find_map(|(k, v)| if v == content { Some(*k) } else { None })
-        {
-            self.id_to_content.remove(&id);
-        }
         self.raw_vectors.remove(content);
         self.quantized_vectors.remove(content);
     }
@@ -280,7 +251,7 @@ fn load_from_disk() -> (HashMap<String, Vec<f32>>, usize) {
 
     let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
     let version = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
-    if magic != MAGIC || (version != 1 && version != 2) {
+    if magic != MAGIC || version != 2 {
         warn!("vector_store: invalid file header");
         return (HashMap::new(), 0);
     }
@@ -336,42 +307,22 @@ fn load_from_disk() -> (HashMap<String, Vec<f32>>, usize) {
     let mut vectors = HashMap::with_capacity(count);
 
     for _ in 0..count {
-        // v2: 读取 content 作为 key
-        let key = if version >= 2 {
-            if offset + 4 > data.len() {
-                break;
-            }
-            let content_len = u32::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-            ]) as usize;
-            offset += 4;
-            if offset + content_len > data.len() {
-                break;
-            }
-            let content = String::from_utf8_lossy(&data[offset..offset + content_len]).into_owned();
-            offset += content_len;
-            content
-        } else {
-            // v1: 读取 id，用 id 字符串作为 key
-            if offset + 8 > data.len() {
-                break;
-            }
-            let id = i64::from_le_bytes([
-                data[offset],
-                data[offset + 1],
-                data[offset + 2],
-                data[offset + 3],
-                data[offset + 4],
-                data[offset + 5],
-                data[offset + 6],
-                data[offset + 7],
-            ]);
-            offset += 8;
-            id.to_string()
-        };
+        // 读取 content 作为 key
+        if offset + 4 > data.len() {
+            break;
+        }
+        let content_len = u32::from_le_bytes([
+            data[offset],
+            data[offset + 1],
+            data[offset + 2],
+            data[offset + 3],
+        ]) as usize;
+        offset += 4;
+        if offset + content_len > data.len() {
+            break;
+        }
+        let key = String::from_utf8_lossy(&data[offset..offset + content_len]).into_owned();
+        offset += content_len;
 
         if trained {
             if let Some(ref params) = quant_params {
@@ -495,21 +446,11 @@ pub(crate) fn init() {
 
     let vector_count = vectors.len();
     let mut store = VectorStore::new(dim);
-    let mut has_content = false;
 
     // 直接移动数据，避免不必要的克隆
-    for (id_str, vec) in vectors {
-        // 尝试恢复 content，如果没有就用 ID 字符串
-        store.raw_vectors.insert(id_str.clone(), vec);
-        if let Ok(id) = id_str.parse::<i64>() {
-            store.id_to_content.insert(id, id_str);
-        }
+    for (content, vec) in vectors {
+        store.raw_vectors.insert(content, vec);
         store.total_added += 1;
-        has_content = true;
-    }
-
-    if has_content && store.reservoir.len() >= MIN_TRAIN_SAMPLES {
-        store.train();
     }
 
     *guard = Some(store);
@@ -530,9 +471,9 @@ pub(crate) fn add_vector(content: &str, embedding: Vec<f32>) {
     };
     store.add(content, embedding);
     // 每 BUFFER_SIZE 次写入刷新磁盘
-    if store.write_buffer.len() >= BUFFER_SIZE || store.total_added.is_multiple_of(10) {
+    if store.pending_writes >= BUFFER_SIZE || store.total_added.is_multiple_of(10) {
         save_to_disk(store);
-        store.write_buffer.clear();
+        store.pending_writes = 0;
     }
 }
 

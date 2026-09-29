@@ -146,9 +146,10 @@ mod tests {
             top_k: 5,
             vector_weight,
             bm25_weight,
+            rrf_k: 60.0,
+            min_vector_similarity: 0.45,
             threshold_config: Some(crate::memory::retrieval::ThresholdConfig::default()),
             posterior_graph_config: None,
-            ..Default::default()
         };
         dual_path_retrieve(query, &documents(), &[], &config)
             .into_iter()

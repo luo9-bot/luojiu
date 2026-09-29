@@ -54,9 +54,6 @@ pub(crate) struct ChatMessage {
     pub content: Option<String>,
     #[serde(default)]
     pub tool_calls: Option<Vec<ToolCall>>,
-    /// DeepSeek V4 等模型的推理内容，后续请求必须回传
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]

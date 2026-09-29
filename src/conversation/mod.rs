@@ -148,7 +148,7 @@ pub(crate) fn handle_group_msg(group_id: u64, user_id: u64, msg: &str) {
         }
 
         // 通用管理员命令 (群聊/私聊均可使用)
-        if let Some(reply) = handle_admin_command(trimmed, group_id, user_id) {
+        if let Some(reply) = handle_admin_command(trimmed, user_id) {
             crate::sender::send_msg(group_id, user_id, &reply);
             return;
         }
@@ -327,14 +327,14 @@ pub(crate) fn handle_private_msg(user_id: u64, msg: &str) {
     }
 
     // 控制命令
-    if let Some(reply) = handle_control_command(0, user_id, trimmed) {
+    if let Some(reply) = handle_control_command(user_id, trimmed) {
         crate::sender::send_msg(0, user_id, &reply);
         return;
     }
 
     // 通用管理员命令
     if is_admin(user_id)
-        && let Some(reply) = handle_admin_command(trimmed, 0, user_id)
+        && let Some(reply) = handle_admin_command(trimmed, user_id)
     {
         crate::sender::send_msg(0, user_id, &reply);
         return;
@@ -362,7 +362,7 @@ pub(crate) fn handle_private_msg(user_id: u64, msg: &str) {
 
 // ── 控制命令 ────────────────────────────────────────────────────
 
-pub(crate) fn handle_control_command(_group_id: u64, user_id: u64, msg: &str) -> Option<String> {
+pub(crate) fn handle_control_command(user_id: u64, msg: &str) -> Option<String> {
     match msg {
         "开!" | "开启对话" => {
             if !crate::toggle_private_chat(crate::db::Actor::Command, user_id, true) {
@@ -420,7 +420,7 @@ pub(crate) fn handle_control_command(_group_id: u64, user_id: u64, msg: &str) ->
 
 // ── 通用管理员命令 (群聊/私聊均可使用) ──────────────────────────
 
-pub(crate) fn handle_admin_command(msg: &str, _group_id: u64, user_id: u64) -> Option<String> {
+pub(crate) fn handle_admin_command(msg: &str, user_id: u64) -> Option<String> {
     match msg {
         "查看群聊" => {
             let groups = crate::get_active_groups();

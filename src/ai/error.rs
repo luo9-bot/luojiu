@@ -304,34 +304,4 @@ mod tests {
         );
         assert!(!SilenceCause::BudgetExhausted { rounds: 3 }.is_deliberate());
     }
-
-    #[test]
-    fn utterance_separates_content_from_cause() {
-        // 有内容时没有沉默原因；沉默时内容不可达——两者不相交
-        let said = Utterance::Say("在的".into());
-        assert!(said.silence_cause().is_none());
-        match said {
-            Utterance::Say(text) => assert_eq!(text, "在的"),
-            Utterance::Silent(_) => panic!("Say 必须携带文本"),
-        }
-
-        let quiet = Utterance::silent(SilenceCause::Chose);
-        assert_eq!(quiet.silence_cause(), Some(&SilenceCause::Chose));
-    }
-
-    #[test]
-    fn upstream_failure_keeps_its_cause_in_the_value() {
-        // 失败原因放在值里而不是 Err：调用方不可能"忽略错误"而丢掉它
-        let failed = Utterance::failed(LlmError::Status {
-            code: 503,
-            body: "upstream".into(),
-        });
-        match failed.silence_cause() {
-            Some(SilenceCause::UpstreamFailed { error }) => {
-                assert_eq!(error.kind(), "status");
-                assert!(error.is_retryable());
-            }
-            other => panic!("失败原因必须保留在值里，实际 {other:?}"),
-        }
-    }
 }

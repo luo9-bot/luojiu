@@ -1,46 +1,16 @@
 //! 知识图谱模块
 //!
-//! 有向图 + 边属性存储，支持：
-//! - 实体和关系存储（有向图）
-//! - 关系属性（权重、时间、来源、证据等）
-//! - Aho-Corasick + LLM 实体提取
-//! - Personalized PageRank 重排序
-//! - BFS 子图扩展
-//! - 关系向量检索
+//! 实体集合存储，支持：
+//! - 实体存储（名称小写去重）
+//! - Aho-Corasick 实体提取
 
-use std::collections::HashMap;
+use std::collections::HashSet;
 use tracing::debug;
 
-/// 图节点（实体）
-#[derive(Debug, Clone)]
-pub(crate) struct GraphNode {
-    pub appearance_count: u32,
-}
-
-/// 图边（关系）- 有向边
-#[derive(Debug, Clone)]
-pub(crate) struct GraphEdge {
-    pub subject: String,
-    pub predicate: String,
-    pub object: String,
-    pub weight: f64,
-    /// 关系可信度 (0.0~1.0)
-    pub confidence: f64,
-    /// 最后更新时间
-    pub updated_at: u64,
-    /// 出现次数
-    pub count: u32,
-    /// 来源（记忆内容摘要）
-    pub source: String,
-}
-
-/// 知识图谱
+/// 知识图谱（实体集合）
 #[derive(Debug, Clone, Default)]
 pub(crate) struct KnowledgeGraph {
-    pub nodes: HashMap<String, GraphNode>,
-    pub edges: Vec<GraphEdge>,
-    /// 邻接表：entity -> [(related_entity, edge_index, is_outgoing)]
-    adjacency: HashMap<String, Vec<(String, usize, bool)>>,
+    entities: HashSet<String>,
 }
 
 impl KnowledgeGraph {
@@ -48,87 +18,9 @@ impl KnowledgeGraph {
         Self::default()
     }
 
-    /// 添加实体（节点以名称小写为 key，因此节点本身不再存一份名字）
+    /// 添加实体（实体以名称小写为 key）
     pub(crate) fn add_entity(&mut self, name: &str) {
-        let entry = self.nodes.entry(name.to_lowercase()).or_insert(GraphNode {
-            appearance_count: 0,
-        });
-        entry.appearance_count += 1;
-    }
-
-    /// 添加有向关系
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn add_relation(
-        &mut self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        weight: f64,
-        confidence: f64,
-        source: &str,
-        now: u64,
-    ) {
-        self.add_entity(subject);
-        self.add_entity(object);
-
-        let edge_idx = self.edges.len();
-        let subject_lower = subject.to_lowercase();
-        let object_lower = object.to_lowercase();
-
-        self.edges.push(GraphEdge {
-            subject: subject_lower.clone(),
-            predicate: predicate.to_string(),
-            object: object_lower.clone(),
-            weight,
-            confidence,
-            updated_at: now,
-            count: 1,
-            source: source.to_string(),
-        });
-
-        // 有向边：出边
-        self.adjacency
-            .entry(subject_lower.clone())
-            .or_default()
-            .push((object_lower.clone(), edge_idx, true));
-        // 反向边：入边（用于PageRank反向传播）
-        self.adjacency
-            .entry(object_lower)
-            .or_default()
-            .push((subject_lower, edge_idx, false));
-    }
-
-    /// 合并或更新关系（如果已存在则增加权重和计数）
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn merge_relation(
-        &mut self,
-        subject: &str,
-        predicate: &str,
-        object: &str,
-        weight: f64,
-        confidence: f64,
-        source: &str,
-        now: u64,
-    ) {
-        let subject_lower = subject.to_lowercase();
-        let object_lower = object.to_lowercase();
-
-        for edge in &mut self.edges {
-            if edge.subject == subject_lower
-                && edge.predicate == predicate
-                && edge.object == object_lower
-            {
-                edge.weight = edge.weight * 0.7 + weight * 0.3;
-                edge.confidence = edge.confidence.max(confidence);
-                edge.count += 1;
-                edge.updated_at = now;
-                if !source.is_empty() {
-                    edge.source = source.to_string();
-                }
-                return;
-            }
-        }
-        self.add_relation(subject, predicate, object, weight, confidence, source, now);
+        self.entities.insert(name.to_lowercase());
     }
 }
 
@@ -269,7 +161,7 @@ where
     f(guard.get_or_insert_with(KnowledgeGraph::new))
 }
 
-/// 从记忆中提取实体关系并更新图谱
+/// 从记忆中提取实体并更新实体集合
 pub(crate) fn update_graph_from_memory(user_id: u64, content: &str) {
     let triples = extract_entities_from_text(content);
     let count = triples.len();
@@ -277,10 +169,10 @@ pub(crate) fn update_graph_from_memory(user_id: u64, content: &str) {
         return;
     }
 
-    let now = crate::util::now_secs();
     with_graph_mut(|graph| {
-        for (subject, predicate, object) in triples {
-            graph.merge_relation(&subject, &predicate, &object, 1.0, 0.8, content, now);
+        for (subject, _predicate, object) in triples {
+            graph.add_entity(&subject);
+            graph.add_entity(&object);
         }
     });
 
@@ -290,7 +182,7 @@ pub(crate) fn update_graph_from_memory(user_id: u64, content: &str) {
 /// 构建全局实体匹配器
 pub(crate) fn build_entity_matcher() -> EntityMatcher {
     with_graph(|graph| {
-        let entities: Vec<String> = graph.nodes.keys().cloned().collect();
+        let entities: Vec<String> = graph.entities.iter().cloned().collect();
         EntityMatcher::build(&entities)
     })
 }

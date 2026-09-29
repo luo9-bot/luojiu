@@ -38,7 +38,7 @@ impl AttentionState {
 }
 
 /// 更新注意力状态（每30秒调用一次，由定时器驱动）
-pub(crate) fn update_attention(state: &mut AttentionState, user_id: u64, is_active: bool) {
+pub(crate) fn update_attention(state: &mut AttentionState, user_id: u64) {
     let now = crate::util::now_secs();
     let elapsed = now.saturating_sub(state.last_update) as f32;
 
@@ -48,35 +48,22 @@ pub(crate) fn update_attention(state: &mut AttentionState, user_id: u64, is_acti
     }
     state.last_update = now;
 
-    // 1. 基础注意力衰减/恢复
-    if is_active {
-        // 活跃对话中注意力缓慢下降（疲劳）
-        state.attention_level -= 0.002 * (elapsed / 30.0);
-    } else {
-        // 不活跃时注意力恢复
-        state.attention_level += 0.005 * (elapsed / 30.0);
-    }
+    // 1. 基础注意力衰减（活跃对话中注意力缓慢下降）
+    state.attention_level -= 0.002 * (elapsed / 30.0);
     state.attention_level = state.attention_level.clamp(0.1, 1.0);
 
     // 2. 用户注意力更新（基于最近交互）
     let user_attn = state.user_attention.entry(user_id).or_insert(0.5);
-    if is_active {
-        *user_attn = (*user_attn + 0.01).min(1.0);
-    } else {
-        *user_attn = (*user_attn - 0.005 * (elapsed / 30.0)).max(0.1);
-    }
+    *user_attn = (*user_attn + 0.01).min(1.0);
 
     // 3. 心流状态更新
     if state.flow_recovery_until > 0 && now >= state.flow_recovery_until {
         state.flow_recovery_until = 0;
     }
 
-    if is_active && state.flow_recovery_until == 0 {
-        // 持续参与时心流上升
+    // 持续参与时心流上升
+    if state.flow_recovery_until == 0 {
         state.flow_state = (state.flow_state + 0.01 * (elapsed / 30.0)).min(1.0);
-    } else if !is_active {
-        // 不活跃时心流下降
-        state.flow_state = (state.flow_state - 0.02 * (elapsed / 30.0)).max(0.0);
     }
 
     debug!(

@@ -5,7 +5,7 @@ mod store;
 
 pub(crate) use store::*;
 
-use tracing::{debug, info};
+use tracing::info;
 
 pub(crate) fn register_person(user_id: u64) {
     if user_id == 0 {
@@ -18,28 +18,9 @@ pub(crate) fn register_person(user_id: u64) {
             is_new = true;
             p.know_since = now;
         }
-        p.know_times += 1;
-        p.last_know = now;
     });
     if is_new {
         info!(user_id, "person_info: new person");
-    }
-}
-
-pub(crate) fn add_memory_point(user_id: u64, point: &str) {
-    let mut added = false;
-    update_profile(user_id, |p| {
-        if p.memory_points.iter().any(|existing| existing == point) {
-            return;
-        }
-        p.memory_points.push(point.into());
-        if p.memory_points.len() > 20 {
-            p.memory_points.remove(0);
-        }
-        added = true;
-    });
-    if added {
-        debug!(user_id, point, "person_info: memory point added");
     }
 }
 
@@ -61,7 +42,7 @@ pub(crate) fn get_display_name(user_id: u64, group_id: u64) -> Option<String> {
     None
 }
 
-/// 从对话中自动提取用户事实并存储
+/// 从对话中自动提取用户事实
 ///
 /// 使用 LLM 从用户消息和 bot 回复中提取稳定事实。
 pub(crate) fn extract_facts_from_conversation(user_id: u64, user_message: &str, bot_reply: &str) {
@@ -78,33 +59,5 @@ pub(crate) fn extract_facts_from_conversation(user_id: u64, user_message: &str, 
         user_message, bot_reply
     );
 
-    // 无意义回复的过滤模式
-    let meaningless_patterns = [
-        "无明确事实",
-        "没有可提取",
-        "无法提取",
-        "没有事实",
-        "暂无",
-        "无相关信息",
-        "无法确定",
-        "没有足够",
-        "无法判断",
-        "无明确",
-        "（无",
-        "(无",
-    ];
-
-    if let Ok(response) = crate::ai::analyze("", &prompt) {
-        for line in response.lines() {
-            let fact = line.trim();
-            if fact.is_empty() || fact.len() <= 2 || fact.len() >= 100 {
-                continue;
-            }
-            // 过滤无意义回复
-            if meaningless_patterns.iter().any(|p| fact.contains(p)) {
-                continue;
-            }
-            add_memory_point(user_id, fact);
-        }
-    }
+    let _ = crate::ai::analyze("", &prompt);
 }

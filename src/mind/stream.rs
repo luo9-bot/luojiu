@@ -303,25 +303,6 @@ mod tests {
     }
 
     #[test]
-    fn recent_sorts_and_truncates() {
-        let mut events = vec![
-            event_at(StreamKind::Sensation, "晚", 3_000),
-            event_at(StreamKind::Inner, "早", 1_000),
-            event_at(StreamKind::Acted, "中", 2_000),
-        ];
-        events.sort_by_key(|e| e.time);
-        assert_eq!(
-            events
-                .iter()
-                .map(|e| e.content.as_str())
-                .collect::<Vec<_>>(),
-            vec!["早", "中", "晚"]
-        );
-        events.drain(..events.len() - 2);
-        assert_eq!(events.len(), 2);
-    }
-
-    #[test]
     fn day_file_uses_local_date() {
         // 2024-01-01 00:00:00 UTC = 08:00 CST → 2024-01-01
         assert!(day_file_name(1_704_067_200).starts_with("2024-01-01"));

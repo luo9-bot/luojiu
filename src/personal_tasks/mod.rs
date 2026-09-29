@@ -35,18 +35,12 @@ impl TaskStatus {
 pub(crate) struct PersonalTask {
     pub id: u64,
     pub title: String,
-    pub source: String,
     pub status: TaskStatus,
-    pub next_action: String,
-    pub priority: u8,
     pub associated_user: u64,
     pub associated_group: u64,
     pub review_at: u64,
     pub follow_up_count: u8,
-    pub blocker: String,
     pub progress: Vec<String>,
-    pub created_at: u64,
-    pub updated_at: u64,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -93,8 +87,6 @@ fn titles_similar(left: &str, right: &str) -> bool {
 /// 新增任务；相同未完成事项只补充进展，避免把同一个念头拆成多项任务。
 pub(crate) fn add_or_reinforce(
     title: &str,
-    source: &str,
-    next_action: &str,
     associated_user: u64,
     associated_group: u64,
 ) -> Option<PersonalTask> {
@@ -111,10 +103,6 @@ pub(crate) fn add_or_reinforce(
             && task.associated_group == associated_group
             && titles_similar(&task.title, title)
     }) {
-        task.updated_at = now;
-        if !next_action.trim().is_empty() {
-            task.next_action = next_action.trim().to_string();
-        }
         // 不把提取模型的原话再写回进展：它下一轮会读到这行，
         // 于是"再次确认：X"层层复制成 #20 那种滚雪球式进展。
         task.progress.push("又被提起一次".to_string());
@@ -138,22 +126,16 @@ pub(crate) fn add_or_reinforce(
     let task = PersonalTask {
         id: store.next_id,
         title: title.to_string(),
-        source: source.to_string(),
         status: if associated_user > 0 {
             TaskStatus::InProgress
         } else {
             TaskStatus::Pending
         },
-        next_action: next_action.trim().to_string(),
-        priority: 1,
         associated_user,
         associated_group,
         review_at: now,
         follow_up_count: 0,
-        blocker: String::new(),
         progress: vec![format!("创建：{}", title)],
-        created_at: now,
-        updated_at: now,
     };
     store.tasks.push(task.clone());
     save(&store);
@@ -175,8 +157,6 @@ pub(crate) fn note_user_message(user_id: u64, group_id: u64, message: &str) {
             && task.associated_group == group_id
         {
             task.review_at = now;
-            task.updated_at = now;
-            task.blocker.clear();
             task.progress.push(format!(
                 "对方回复：{}",
                 message.chars().take(40).collect::<String>()
@@ -211,8 +191,6 @@ pub(crate) fn review_due_tasks() {
         match task.status {
             TaskStatus::WaitingForPerson if task.follow_up_count >= MAX_FOLLOW_UPS => {
                 task.status = TaskStatus::Abandoned;
-                task.blocker = format!("已跟进 {MAX_FOLLOW_UPS} 次没有回音，放下");
-                task.next_action.clear();
                 task.review_at = 0;
                 task.progress.push("放下：对方一直没接".to_string());
                 changed = true;
@@ -220,7 +198,6 @@ pub(crate) fn review_due_tasks() {
             TaskStatus::WaitingForPerson => {
                 task.follow_up_count += 1;
                 task.status = TaskStatus::InProgress;
-                task.next_action = "决定是否自然地跟进一次".to_string();
                 task.progress
                     .push(format!("等待超时（第 {} 次）", task.follow_up_count));
                 changed = true;
@@ -233,7 +210,6 @@ pub(crate) fn review_due_tasks() {
             _ => {}
         }
         if changed {
-            task.updated_at = now;
             task.progress.truncate(MAX_PROGRESS_LINES);
         }
     }
@@ -252,10 +228,8 @@ fn mark_waiting_for_person(task_id: u64) {
         }
         task.status = TaskStatus::WaitingForPerson;
         task.review_at = now + FOLLOW_UP_DELAY_SECS;
-        task.blocker = "等对方回应".to_string();
-        task.updated_at = now;
         task.progress.push("已约定，等待对方回应".to_string());
-        task.progress.truncate(8);
+        task.progress.truncate(MAX_PROGRESS_LINES);
         save(&store);
     }
 }
@@ -276,7 +250,6 @@ pub(crate) fn extract_from_conversation(user_id: u64, group_id: u64, user_messag
         crate::prompt::PromptManager::get().raw("task_progress"),
         &context,
         &[crate::ai::task_progress_tool()],
-        Some(serde_json::json!("auto")),
     );
     let Ok(parsed) = result else {
         return;
@@ -302,10 +275,7 @@ pub(crate) fn extract_from_conversation(user_id: u64, group_id: u64, user_messag
         }
         let task_user = if waiting { user_id } else { 0 };
         let task_group = if waiting { group_id } else { 0 };
-        if let Some(task) =
-            add_or_reinforce(title, "conversation", next_action, task_user, task_group)
-            && waiting
-        {
+        if let Some(task) = add_or_reinforce(title, task_user, task_group) && waiting {
             mark_waiting_for_person(task.id);
         }
     }

@@ -7,43 +7,20 @@
 //! 现在：计数一行 UPSERT、日志一行 INSERT，跨天重置与 48 小时裁剪各是一条
 //! 范围删除。
 
-use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::config;
 use crate::util::{hour_cst_at, now_secs, segment_start_cst};
 
-// ── 段日志（后台视图用） ────────────────────────────────────
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct SegmentMessage {
-    pub user_id: u64,
-    pub message: String,
-    pub timestamp: u64,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct SegmentLogEntry {
-    pub segment_start: u64,
-    pub messages: Vec<SegmentMessage>,
-}
-
 // ── 初始化 ──────────────────────────────────────────────────
 
-/// 初始化：跨天则重置，并裁掉 48 小时前的段日志
+/// 初始化：跨天则重置计数
 pub(crate) fn init() {
     let db = crate::db::db();
     match db.quota_roll_day(&crate::util::today_str()) {
-        Ok(true) => debug!("quota: 跨天，计数与段日志已重置"),
+        Ok(true) => debug!("quota: 跨天，计数已重置"),
         Ok(false) => {}
         Err(error) => tracing::warn!(%error, "quota: 跨天检查失败"),
-    }
-
-    let cutoff = now_secs().saturating_sub(48 * 3600) as i64;
-    match db.quota_prune_messages(cutoff) {
-        Ok(removed) if removed > 0 => debug!(removed, "quota: 已裁剪过期段日志"),
-        Ok(_) => {}
-        Err(error) => tracing::warn!(%error, "quota: 段日志裁剪失败"),
     }
 }
 
@@ -94,22 +71,5 @@ mod tests {
         }
         assert_eq!(granted, max, "最多只能放行 {max} 次");
         assert_eq!(db.quota_segment_count(group, segment).expect("计数"), max);
-    }
-
-    /// 段日志按段分组返回，且只取最近的若干段
-    #[test]
-    fn segment_logs_are_grouped_and_limited() {
-        let db = crate::db::db();
-        let group = 993_002;
-
-        for (segment, text) in [(2_000_000u64, "旧段"), (2_000_300u64, "新段")] {
-            db.quota_log_message(group, segment, 11, text, segment as i64)
-                .expect("写日志");
-        }
-
-        let messages = db.quota_messages(group, 1).expect("读日志");
-        assert_eq!(messages.len(), 1, "只要最近一个段");
-        assert_eq!(messages[0].segment_start, 2_000_300);
-        assert_eq!(messages[0].message, "新段");
     }
 }

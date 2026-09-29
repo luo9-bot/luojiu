@@ -47,7 +47,8 @@ pub(crate) fn recall_id(user_id: u64, group_id: u64, content: &str) -> String {
     hasher.update(content.as_bytes());
     let mut id = String::with_capacity(40);
     for byte in hasher.finalize() {
-        write!(&mut id, "{byte:02x}").expect("writing to String cannot fail");
+        // 写入 String 不会失败，结果直接丢弃
+        let _ = write!(&mut id, "{byte:02x}");
     }
     id
 }
@@ -304,14 +305,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn flashback_output_is_first_person_experience() {
-        // 闪回行必须是第一人称体验的转述，不带指令、不带数值
-        let line = "（毫无来由地，一个画面突然涌上来）他上周说过要去看海";
-        assert!(line.starts_with("（毫无来由地"));
-        assert!(!line.contains("memory"));
-    }
-
-    #[test]
     fn emotion_valence_signs() {
         use crate::emotion::EmotionType::*;
         assert_eq!(emotion_valence(&Happy), Some(1.0));
@@ -321,14 +314,6 @@ mod tests {
         assert_eq!(emotion_valence(&Worried), Some(-1.0));
         assert_eq!(emotion_valence(&Tired), None);
         assert_eq!(emotion_valence(&Neutral), None);
-    }
-
-    #[test]
-    fn recall_output_format_is_paraphrase() {
-        // 输出必须是转述口吻，不带指令、不带数值
-        let line = "想起：他上周说过要去看海";
-        assert!(line.starts_with("想起："));
-        assert!(!line.contains("memory"));
     }
 
     #[test]

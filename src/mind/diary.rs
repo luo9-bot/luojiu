@@ -93,9 +93,7 @@ pub(crate) fn add(entries: Vec<DiaryEntry>) {
         index.push(entry);
     }
 
-    while index.len() > MAX_ENTRIES {
-        index.remove(0);
-    }
+    index.drain(..index.len().saturating_sub(MAX_ENTRIES));
     save_index(&index);
 
     // 按月 md 追加（人类可读视图）
@@ -117,19 +115,6 @@ pub(crate) fn recent(n: usize) -> Vec<DiaryEntry> {
     let index = load_index();
     let start = index.len().saturating_sub(n);
     index[start..].to_vec()
-}
-
-/// 涉及某人的日记条数（清洗用）
-pub(crate) fn purge_about(uid: u64) -> usize {
-    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut index = load_index();
-    let before = index.len();
-    index.retain(|e| e.about != Some(uid));
-    let removed = before - index.len();
-    if removed > 0 {
-        save_index(&index);
-    }
-    removed
 }
 
 static STORE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

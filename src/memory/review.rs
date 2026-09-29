@@ -146,7 +146,6 @@ pub(crate) fn ai_review_all() {
             crate::prompt::PromptManager::get().raw("memory_review"),
             &context,
             &[crate::ai::memory_review_tool()],
-            Some(serde_json::json!("auto")),
         );
         match result {
             Ok(parsed) => {

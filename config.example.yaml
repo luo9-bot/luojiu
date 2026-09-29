@@ -150,15 +150,6 @@ conversation:
 
 # ── 记忆参数 ─────────────────────────────────────────────────────
 memory:
-  # 普通记忆过期天数
-  # 超过此天数未被访问的普通记忆会被淡忘（不再注入 prompt）
-  # 设为 0 则永不过期
-  normal_expire_days: 30
-
-  # 重要记忆降权天数
-  # 超过此天数未被访问的重要记忆会被标记为 [淡忘]
-  important_fade_days: 7
-
   # 自动摘要触发阈值
   # 对话历史超过此轮数时，自动提取摘要存为普通记忆
   auto_summarize_threshold: 10
@@ -332,8 +323,6 @@ log:
 # 输出检测 始终强制开启，无法通过配置关闭
 anti_injection:
   input:
-    # 最大消息长度 (超过则截断)
-    max_message_length: 2000
     # 敏感内容处理方式: replace(替换为安全内容) | block(直接阻止)
     sensitive_action: "block"
   output:

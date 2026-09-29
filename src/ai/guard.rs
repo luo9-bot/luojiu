@@ -37,8 +37,6 @@ pub(crate) const ALL_TOOL_NAMES: &[&str] = &[
     "weekly_plan",
     "monthly_plan",
     "memory_review",
-    "decide_reply",
-    "batch_decide",
     // 她自己的计划（表达与回神两条路径共用）
     "check_plan",
     "add_plan",

@@ -210,13 +210,12 @@ fn completion_text(req: &ChatRequest, prompt_name: &str) -> Result<String, Strin
 
 /// 调用 AI API，注入记忆/人格/情绪上下文
 ///
-/// 返回 (reply, detected_emotion)
+/// 返回回复文本
 pub(crate) fn chat(
     base_prompt: &str,
     extra_context: &str,
-    history: &[(String, String)],
     user_message: &str,
-) -> Result<(String, String), String> {
+) -> Result<String, String> {
     let cfg = config::get();
     let now = crate::util::now_formatted_cst();
     let time_prompt = format!("\n你的时间为：{}\n", now);
@@ -238,23 +237,12 @@ pub(crate) fn chat(
         role: "system".to_string(),
         content: Some(full_system),
         tool_calls: None,
-        reasoning_content: None,
     }];
-
-    for (role, content) in history {
-        messages.push(ChatMessage {
-            role: role.clone(),
-            content: Some(content.clone()),
-            tool_calls: None,
-            reasoning_content: None,
-        });
-    }
 
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: Some(user_message.to_string()),
         tool_calls: None,
-        reasoning_content: None,
     });
 
     let req = ChatRequest {
@@ -271,7 +259,7 @@ pub(crate) fn chat(
     };
 
     let reply = completion_text(&req, "chat")?;
-    Ok((reply, String::new()))
+    Ok(reply)
 }
 
 /// 轻量级 AI 分析调用 (记忆提取、情绪分析等)
@@ -285,13 +273,11 @@ pub(crate) fn analyze(system_prompt: &str, user_content: &str) -> Result<String,
             role: "system".to_string(),
             content: Some(system_prompt.to_string()),
             tool_calls: None,
-            reasoning_content: None,
         },
         ChatMessage {
             role: "user".to_string(),
             content: Some(user_content.to_string()),
             tool_calls: None,
-            reasoning_content: None,
         },
     ];
 
@@ -320,30 +306,6 @@ pub(crate) fn analyze_with_tools(
     system_prompt: &str,
     user_content: &str,
     tools: &[Tool],
-    tool_choice: Option<serde_json::Value>,
-) -> Result<serde_json::Value, String> {
-    let cfg = config::get();
-    analyze_with_tools_cfg(
-        system_prompt,
-        user_content,
-        tools,
-        tool_choice,
-        cfg.ai.analysis_temperature,
-        0.3,
-    )
-}
-
-/// 带温度/采样参数的分析调用
-///
-/// 与 `analyze_with_tools` 逻辑完全一致，仅允许调用方指定
-/// temperature 与 top_p（如主动消息生成需要更高随机性时使用）。
-pub(crate) fn analyze_with_tools_cfg(
-    system_prompt: &str,
-    user_content: &str,
-    tools: &[Tool],
-    tool_choice: Option<serde_json::Value>,
-    temperature: f64,
-    top_p: f64,
 ) -> Result<serde_json::Value, String> {
     let cfg = config::get();
 
@@ -356,8 +318,6 @@ pub(crate) fn analyze_with_tools_cfg(
         user_content.to_string()
     };
 
-    let tc_value = tool_choice.unwrap_or(serde_json::json!("auto"));
-
     // 最多重试 2 次：模型偶尔忽略 tool_calls 返回纯文本
     for attempt in 0..2u8 {
         let messages = vec![
@@ -365,13 +325,11 @@ pub(crate) fn analyze_with_tools_cfg(
                 role: "system".to_string(),
                 content: Some(system_prompt.to_string()),
                 tool_calls: None,
-                reasoning_content: None,
             },
             ChatMessage {
                 role: "user".to_string(),
                 content: Some(user_content.to_string()),
                 tool_calls: None,
-                reasoning_content: None,
             },
         ];
         let req = ChatRequest {
@@ -379,11 +337,11 @@ pub(crate) fn analyze_with_tools_cfg(
             messages,
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
-            temperature,
-            top_p,
+            temperature: cfg.ai.analysis_temperature,
+            top_p: 0.3,
             max_tokens: cfg.ai.analysis_max_tokens,
             tools: Some(tools.to_vec()),
-            tool_choice: Some(tc_value.clone()),
+            tool_choice: Some(serde_json::json!("auto")),
             thinking: Some(serde_json::json!({"type": "disabled"})),
         };
 
@@ -486,8 +444,7 @@ pub(crate) fn analyze_with_tools_cfg(
 
 /// 尝试将纯文本包装为工具的 JSON 参数
 ///
-/// 兼容模型直接输出消息文本而不调用 tool_calls 的情况，
-/// 适用于 memory_review、decide_reply 等场景。
+/// 兼容模型直接输出消息文本而不调用 tool_calls 的情况。
 fn try_wrap_text_for_tools(text: &str, tools: &[Tool]) -> Result<serde_json::Value, ()> {
     for tool in tools {
         let params = &tool.function.parameters;
@@ -497,7 +454,7 @@ fn try_wrap_text_for_tools(text: &str, tools: &[Tool]) -> Result<serde_json::Val
         let Some(required) = required else { continue };
         let Some(props) = props else { continue };
 
-        // 情况 1: 只有一个 required 参数且为 string → { param_name: text }
+        // 只有一个 required 参数且为 string → { param_name: text }
         if required.len() == 1 {
             let key = required[0].as_str().unwrap_or("");
             if let Some(schema) = props.get(key)
@@ -508,46 +465,6 @@ fn try_wrap_text_for_tools(text: &str, tools: &[Tool]) -> Result<serde_json::Val
                 debug!(tool = %tool.function.name, key, "try_wrap_text_for_tools: wrapped as single param");
                 return Ok(serde_json::Value::Object(map));
             }
-        }
-
-        // 情况 2: memory_review — { action: "keep", reason: text }
-        if tool.function.name == "memory_review" {
-            let wrapped = serde_json::json!({
-                "action": "keep",
-                "reason": text
-            });
-            debug!("try_wrap_text_for_tools: wrapped as memory_review");
-            return Ok(wrapped);
-        }
-
-        // 情况 3: decide_reply — AI 直接输出文本而非调用工具
-        if tool.function.name == "decide_reply" {
-            let trimmed = text.trim();
-            // 检测 AI 是否在表达"不想回复"的意图
-            let silent_keywords = [
-                "不回复",
-                "不想回",
-                "不应该回",
-                "不接了",
-                "不参与",
-                "没必要回",
-                "不需要回",
-                "就不回",
-                "我就不回",
-                "不插嘴",
-                "不凑热闹",
-                "不搭话",
-            ];
-            let should_not_reply = silent_keywords.iter().any(|k| trimmed.contains(k));
-            if should_not_reply {
-                let wrapped = serde_json::json!({"reply": false, "reason": format!("fallback: AI表达不想回复 - {}", &trimmed[..trimmed.len().min(80)])});
-                debug!("try_wrap_text_for_tools: wrapped as decide_reply (no reply)");
-                return Ok(wrapped);
-            }
-            // 默认认为想回复（AI 输出了内容，通常意味着想说什么）
-            let wrapped = serde_json::json!({"reply": true, "reason": "fallback: AI直接输出文本"});
-            debug!("try_wrap_text_for_tools: wrapped as decide_reply (reply)");
-            return Ok(wrapped);
         }
     }
     Err(())

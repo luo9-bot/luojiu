@@ -149,10 +149,6 @@ impl Default for ConversationConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct MemoryConfig {
-    #[serde(default = "default_normal_expire_days")]
-    pub normal_expire_days: u64,
-    #[serde(default = "default_important_fade_days")]
-    pub important_fade_days: u64,
     #[serde(default = "default_auto_summarize_threshold")]
     pub auto_summarize_threshold: usize,
     #[serde(default = "default_working_memory_expire_hours")]
@@ -173,8 +169,6 @@ pub(crate) struct MemoryConfig {
 impl Default for MemoryConfig {
     fn default() -> Self {
         Self {
-            normal_expire_days: default_normal_expire_days(),
-            important_fade_days: default_important_fade_days(),
             auto_summarize_threshold: default_auto_summarize_threshold(),
             working_memory_expire_hours: default_working_memory_expire_hours(),
             forgetting_enabled: true,
@@ -436,9 +430,6 @@ pub(crate) struct AntiInjectionConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct InputFilterConfig {
-    /// 最大消息长度 (超过则截断)
-    #[serde(default = "default_max_message_length")]
-    pub max_message_length: usize,
     /// 敏感内容处理方式: "replace" | "block"
     /// 最低等级为 "replace"，可配置为 "block"
     #[serde(default = "default_sensitive_action")]
@@ -448,7 +439,6 @@ pub(crate) struct InputFilterConfig {
 impl Default for InputFilterConfig {
     fn default() -> Self {
         Self {
-            max_message_length: 2000,
             sensitive_action: "block".to_string(),
         }
     }
@@ -768,12 +758,6 @@ fn default_quota_segments() -> Vec<QuotaSegment> {
 fn default_log_level() -> String {
     "info".into()
 }
-fn default_normal_expire_days() -> u64 {
-    30
-}
-fn default_important_fade_days() -> u64 {
-    7
-}
 fn default_auto_summarize_threshold() -> usize {
     10
 }
@@ -848,9 +832,6 @@ fn default_forget_success() -> String {
 }
 fn default_forget_fail() -> String {
     "没有找到对话记录".into()
-}
-fn default_max_message_length() -> usize {
-    2000
 }
 fn default_sensitive_action() -> String {
     "block".into()

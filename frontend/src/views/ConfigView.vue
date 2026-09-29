@@ -135,8 +135,6 @@ const sections = [
   },
   { id: 'memory', label: '记忆', color: 'var(--accent)',
     fields: [
-      { key: 'memory.normal_expire_days', label: '普通记忆过期(天)', type: 'number' },
-      { key: 'memory.important_fade_days', label: '重要记忆衰减(天)', type: 'number' },
       { key: 'memory.auto_summarize_threshold', label: '自动摘要阈值', type: 'number' },
       { key: 'memory.working_memory_expire_hours', label: '工作记忆过期(小时)', type: 'number' },
     ]
@@ -178,7 +176,6 @@ const sections = [
   },
   { id: 'anti_injection', label: '防注入', color: 'var(--danger)',
     fields: [
-      { key: 'anti_injection.input.max_message_length', label: '最大消息长度', type: 'number' },
       { key: 'anti_injection.input.sensitive_action', label: '敏感内容处理', type: 'string' },
       { key: 'anti_injection.output.action', label: '输出处理', type: 'string' },
       { key: 'anti_injection.behavior.rate_limit', label: '速率限制', type: 'bool' },

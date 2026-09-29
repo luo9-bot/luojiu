@@ -65,8 +65,6 @@ mod cron {
 #[cfg(not(feature = "plugin"))]
 mod sender {
     pub fn send_msg(_group_id: u64, _user_id: u64, _text: &str) {}
-    pub fn send_with_typing(_group_id: u64, _user_id: u64, _text: &str, _incoming: &str) {}
-    pub fn send_at_msg(_group_id: u64, _user_id: u64, _text: &str) {}
     pub fn safe_send(_group_id: u64, _user_id: u64, _reply: &str, _incoming: &str) -> bool {
         true
     }
@@ -835,12 +833,7 @@ fn generate_plan_entries(
     tool: ai::Tool,
     timeframe: schedule::Timeframe,
 ) -> Vec<schedule::GeneratedItem> {
-    let parsed = match ai::analyze_with_tools(
-        context,
-        instruction,
-        &[tool],
-        Some(serde_json::json!("auto")),
-    ) {
+    let parsed = match ai::analyze_with_tools(context, instruction, &[tool]) {
         Ok(parsed) => parsed,
         Err(e) => {
             debug!(error = %e, timeframe = timeframe.label(), "schedule: 计划生成失败");
@@ -963,7 +956,7 @@ pub fn get_active_users() -> Vec<u64> {
 ///
 /// 与 [`set_blacklisted`] 同样的三步：内存 → 状态库 → 审计。
 /// 先前的实现只改内存，于是**激活状态从不落盘**：后台开的对话重启即失。
-pub fn toggle_group_chat(actor: db::Actor, group_id: u64, enable: bool) -> bool {
+pub(crate) fn toggle_group_chat(actor: db::Actor, group_id: u64, enable: bool) -> bool {
     apply_activation(actor, db::Scope::Group, group_id, enable)
 }
 
@@ -971,7 +964,7 @@ pub fn toggle_group_chat(actor: db::Actor, group_id: u64, enable: bool) -> bool 
 ///
 /// 关闭时不去动批次缓冲：那是主循环线程独有的状态，而缓冲到期后
 /// 仍会在入口处被门禁拦下（`handle_private_msg` 检查是否活跃）。
-pub fn toggle_private_chat(actor: db::Actor, user_id: u64, enable: bool) -> bool {
+pub(crate) fn toggle_private_chat(actor: db::Actor, user_id: u64, enable: bool) -> bool {
     apply_activation(actor, db::Scope::Private, user_id, enable)
 }
 

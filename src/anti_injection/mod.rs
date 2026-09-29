@@ -26,9 +26,8 @@ use tracing::{info, warn};
 // ── 模块公共 API ──────────────────────────────────────────────
 
 pub(crate) use behavior::{
-    ban_user, enable_vision, get_all_user_statuses, get_penalty_multiplier, get_reputation,
-    get_user_status, get_violation_count, is_silent_banned, is_vision_disabled, reset_reputation,
-    silent_ban_user, unban_user,
+    enable_vision, get_all_user_statuses, get_penalty_multiplier, get_reputation, get_user_status,
+    get_violation_count, is_silent_banned, is_vision_disabled, reset_reputation, unban_user,
 };
 pub(crate) use decision::{Action, DetectionResult, SecurityIssue};
 pub(crate) use memory_guard::{check_inner_output, check_memory_entry};

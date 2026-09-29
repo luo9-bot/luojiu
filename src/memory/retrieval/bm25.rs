@@ -12,8 +12,6 @@ const B: f64 = 0.75;
 pub(crate) struct Bm25Result {
     pub id: String,
     pub score: f64,
-    /// 匹配到的 token 数量（预留用于调试和分析）
-    pub _matched_tokens: usize,
 }
 
 /// BM25 搜索
@@ -68,11 +66,9 @@ pub(crate) fn search(
             }
 
             let mut score = 0.0;
-            let mut matched = 0;
             for qtoken in &query_tokens {
                 let tf_val = tf.get(qtoken).copied().unwrap_or(0) as f64;
                 if tf_val > 0.0 {
-                    matched += 1;
                     let idf_val = idf.get(qtoken).copied().unwrap_or(0.0);
                     let tf_norm =
                         (tf_val * (K1 + 1.0)) / (tf_val + K1 * (1.0 - B + B * doc_len / avg_len));
@@ -83,7 +79,6 @@ pub(crate) fn search(
             Bm25Result {
                 id: id.clone(),
                 score,
-                _matched_tokens: matched,
             }
         })
         .filter(|r| r.score > 0.0)

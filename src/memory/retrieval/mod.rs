@@ -30,20 +30,6 @@ pub(crate) struct RetrievalConfig {
     pub posterior_graph_config: Option<PosteriorGraphConfig>,
 }
 
-impl Default for RetrievalConfig {
-    fn default() -> Self {
-        Self {
-            top_k: 10,
-            vector_weight: 0.7,
-            bm25_weight: 0.3,
-            rrf_k: 60.0,
-            min_vector_similarity: 0.45,
-            threshold_config: None,
-            posterior_graph_config: None,
-        }
-    }
-}
-
 /// 双路检索（完整版）
 ///
 /// 1. BM25 关键词检索

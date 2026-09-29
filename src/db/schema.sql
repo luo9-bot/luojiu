@@ -18,7 +18,6 @@ CREATE TABLE IF NOT EXISTS admin_audit (
     detail     TEXT    NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit(created_at);
 
 -- 每个用户一行。state 列是序列化后的 EmotionState：这张表的目的是把
 -- 为了读一个用户而解析整份 emotion.json 换成一次主键查询，
@@ -53,7 +52,6 @@ CREATE TABLE IF NOT EXISTS api_usage (
     cache_hit         INTEGER NOT NULL,
     cache_miss        INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_api_usage_ts ON api_usage(ts);
 
 -- 终身累计：与明细分开，因为明细会被裁剪而累计不会
 CREATE TABLE IF NOT EXISTS api_usage_total (
@@ -89,18 +87,6 @@ CREATE TABLE IF NOT EXISTS quota_segment (
     count         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (group_id, segment_start)
 );
-
-CREATE TABLE IF NOT EXISTS quota_segment_message (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    group_id      INTEGER NOT NULL,
-    segment_start INTEGER NOT NULL,
-    user_id       INTEGER NOT NULL,
-    message       TEXT    NOT NULL,
-    ts            INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_quota_message_group_seg
-    ON quota_segment_message(group_id, segment_start);
-CREATE INDEX IF NOT EXISTS idx_quota_message_ts ON quota_segment_message(ts);
 
 -- 跨天重置用的游标（只有一行）
 CREATE TABLE IF NOT EXISTS quota_meta (

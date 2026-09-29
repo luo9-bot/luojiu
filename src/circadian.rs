@@ -26,19 +26,6 @@ pub(crate) struct CircadianRhythm {
     pub current_hour: f32,
 }
 
-impl Default for CircadianRhythm {
-    fn default() -> Self {
-        Self {
-            energy_level: 0.5,
-            cognitive_clarity: 0.5,
-            patience_level: 0.5,
-            sociability: 0.5,
-            humor_sensitivity: 0.5,
-            current_hour: 12.0,
-        }
-    }
-}
-
 /// 计算当前昼夜节律
 ///
 /// 使用正弦曲线模拟人类昼夜节律：
@@ -61,26 +48,26 @@ pub(crate) fn calculate() -> CircadianRhythm {
 
     // 精力：主正弦曲线 + 人格偏移
     let energy_raw = (base_phase + phase_offset).cos();
-    let energy_level = ((energy_raw * amplitude + 0.5) as f32).clamp(0.0, 1.0);
+    let energy_level = (energy_raw * amplitude + 0.5).clamp(0.0, 1.0);
 
     // 思维清晰度：精力偏移30分钟（早起迷糊期）
     let clarity_phase = base_phase + phase_offset + 0.13; // ~30分钟偏移
     let clarity_raw = clarity_phase.cos();
-    let cognitive_clarity = ((clarity_raw * amplitude + 0.5) as f32).clamp(0.0, 1.0);
+    let cognitive_clarity = (clarity_raw * amplitude + 0.5).clamp(0.0, 1.0);
 
     // 耐心：与精力反相（精力差时反而更有耐心等待）
     let patience_raw = (base_phase + phase_offset + PI * 0.3).cos();
-    let patience_level = ((patience_raw * amplitude * 0.6 + 0.5) as f32).clamp(0.0, 1.0);
+    let patience_level = (patience_raw * amplitude * 0.6 + 0.5).clamp(0.0, 1.0);
 
     // 社交意愿：峰值在18:00（傍晚），谷底在6:00（清晨）
     let social_phase = (time_of_day - 18.0) * PI / 12.0 + phase_offset;
     let sociability_raw = social_phase.cos();
-    let sociability = ((sociability_raw * amplitude + 0.5) as f32).clamp(0.0, 1.0);
+    let sociability = (sociability_raw * amplitude + 0.5).clamp(0.0, 1.0);
 
     // 幽默感：晚上更活跃（20:00峰值）
     let humor_phase = (time_of_day - 20.0) * PI / 12.0 + phase_offset;
     let humor_raw = humor_phase.cos();
-    let humor_sensitivity = ((humor_raw * amplitude * 0.8 + 0.5) as f32).clamp(0.0, 1.0);
+    let humor_sensitivity = (humor_raw * amplitude * 0.8 + 0.5).clamp(0.0, 1.0);
 
     CircadianRhythm {
         energy_level,

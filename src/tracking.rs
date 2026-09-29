@@ -62,7 +62,7 @@ pub(crate) fn summary() -> serde_json::Value {
                 "total_tokens": entry.total_tokens,
                 "cache_hit": entry.cache_hit,
                 "cache_miss": entry.cache_miss,
-                "avg_total": if entry.calls > 0 { entry.total_tokens / entry.calls } else { 0 },
+                "avg_total": entry.total_tokens.checked_div(entry.calls).unwrap_or(0),
             })
         })
         .collect();

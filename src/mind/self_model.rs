@@ -61,12 +61,6 @@ pub(crate) fn kernel() -> Option<Kernel> {
     }
 }
 
-/// 保存 kernel（创作者编辑，原子落盘）
-pub(crate) fn save_kernel(k: &Kernel) -> Result<(), String> {
-    let json = serde_json::to_string_pretty(k).map_err(|e| format!("序列化失败: {e}"))?;
-    crate::util::atomic_write(kernel_path(), json).map_err(|e| format!("落盘失败: {e}"))
-}
-
 /// 把 kernel 渲染成第一人称身份文本
 fn render_kernel(k: &Kernel) -> String {
     let mut sections: Vec<String> = Vec::new();

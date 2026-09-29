@@ -39,7 +39,7 @@ impl Scope {
 
 /// 谁在改状态——审计要能回答"谁改的"
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Actor {
+pub(crate) enum Actor {
     /// 启动流程（把配置里的名单并入运行时）
     Boot,
     /// 聊天里的管理命令
@@ -49,7 +49,7 @@ pub enum Actor {
 }
 
 impl Actor {
-    pub fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Actor::Boot => "boot",
             Actor::Command => "command",
@@ -111,14 +111,6 @@ pub(crate) struct WorkingMemoryRow {
     pub content: String,
     pub created_at: i64,
     pub bot_replied: bool,
-}
-
-/// 按群内下标删除的结果
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeleteAtOutcome {
-    Removed,
-    /// 该群没有这一条（下标越界）
-    OutOfRange,
 }
 
 /// 每群保留的最大工作记忆条数
@@ -196,15 +188,19 @@ impl PerUserState {
             PerUserState::Relationship => "relationship",
         }
     }
-}
 
-/// 一条配额段内消息
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct QuotaMessage {
-    pub segment_start: u64,
-    pub user_id: u64,
-    pub message: String,
-    pub ts: i64,
+    /// 载荷列名
+    ///
+    /// 两张表建表时各起了名字（`person.profile` / `relationship.state`），
+    /// 通用 SQL 必须跟着走：写死 `state` 会让人物档案在**新建库**上每次
+    /// 读写都报 `no such column`，而调用方只 warn 兜底——读到的永远是
+    /// 默认档案，写入永远丢失，表面上却一切正常。
+    fn column(self) -> &'static str {
+        match self {
+            PerUserState::Person => "profile",
+            PerUserState::Relationship => "state",
+        }
+    }
 }
 
 /// 影子观测的一个形态
@@ -345,11 +341,7 @@ impl Db {
             let mut statement =
                 conn.prepare("SELECT id FROM activation WHERE scope = ?1 ORDER BY enabled_at, id")?;
             let rows = statement.query_map(rusqlite::params![scope.as_str()], |row| row.get(0))?;
-            let mut ids = Vec::new();
-            for id in rows {
-                ids.push(id?);
-            }
-            Ok(ids)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -380,11 +372,7 @@ impl Db {
         self.with_conn(|conn| {
             let mut statement = conn.prepare("SELECT user_id FROM blocklist ORDER BY user_id")?;
             let rows = statement.query_map([], |row| row.get(0))?;
-            let mut ids = Vec::new();
-            for id in rows {
-                ids.push(id?);
-            }
-            Ok(ids)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -465,11 +453,7 @@ impl Db {
             let mut statement =
                 conn.prepare("SELECT user_id, state FROM emotion ORDER BY user_id")?;
             let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-            let mut states = Vec::new();
-            for entry in rows {
-                states.push(entry?);
-            }
-            Ok(states)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -557,11 +541,7 @@ impl Db {
                 rusqlite::params![group_id, after, limit as i64],
                 read_working_memory_row,
             )?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -576,23 +556,7 @@ impl Db {
                  WHERE group_id = ?1 ORDER BY id",
             )?;
             let rows = statement.query_map(rusqlite::params![group_id], read_working_memory_row)?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
-        })
-    }
-
-    /// 该群是否还有工作记忆
-    pub(crate) fn working_memory_group_exists(&self, group_id: u64) -> Result<bool, DbError> {
-        self.with_conn(|conn| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM working_memory WHERE group_id = ?1",
-                rusqlite::params![group_id],
-                |row| row.get(0),
-            )?;
-            Ok(count > 0)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -610,11 +574,7 @@ impl Db {
                 let group_id: u64 = row.get(0)?;
                 Ok((group_id, read_working_memory_row(row)?))
             })?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -635,28 +595,6 @@ impl Db {
             }
             transaction.commit()?;
             Ok(removed)
-        })
-    }
-
-    /// 按群内下标删除（下标按 id 升序，与后台列表的顺序一致）
-    pub(crate) fn working_memory_delete_at(
-        &self,
-        group_id: u64,
-        index: usize,
-    ) -> Result<DeleteAtOutcome, DbError> {
-        self.with_conn(|conn| {
-            let target: Option<i64> = conn
-                .query_row(
-                    "SELECT id FROM working_memory WHERE group_id = ?1 ORDER BY id LIMIT 1 OFFSET ?2",
-                    rusqlite::params![group_id, index as i64],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(id) = target else {
-                return Ok(DeleteAtOutcome::OutOfRange);
-            };
-            conn.execute("DELETE FROM working_memory WHERE id = ?1", rusqlite::params![id])?;
-            Ok(DeleteAtOutcome::Removed)
         })
     }
 
@@ -806,11 +744,7 @@ impl Db {
                     cache_miss: row.get::<_, i64>(6)? as u64,
                 })
             })?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -834,11 +768,7 @@ impl Db {
                     cache_miss: row.get(7)?,
                 })
             })?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -906,7 +836,7 @@ impl Db {
 
     // ── 配额 ────────────────────────────────────────────────────
 
-    /// 跨天重置：日期不同则清空计数与段日志，返回是否发生了重置
+    /// 跨天重置：日期不同则清空计数，返回是否发生了重置
     pub(crate) fn quota_roll_day(&self, day: &str) -> Result<bool, DbError> {
         self.with_conn(|conn| {
             let stored: Option<String> = conn
@@ -919,7 +849,6 @@ impl Db {
             }
             let transaction = conn.unchecked_transaction()?;
             transaction.execute("DELETE FROM quota_segment", [])?;
-            transaction.execute("DELETE FROM quota_segment_message", [])?;
             transaction.execute(
                 "INSERT INTO quota_meta (id, day) VALUES (1, ?1)
                  ON CONFLICT(id) DO UPDATE SET day = excluded.day",
@@ -980,83 +909,6 @@ impl Db {
         })
     }
 
-    /// 记录一条段内消息
-    pub(crate) fn quota_log_message(
-        &self,
-        group_id: u64,
-        segment_start: u64,
-        user_id: u64,
-        message: &str,
-        ts: i64,
-    ) -> Result<(), DbError> {
-        self.with_conn(|conn| {
-            conn.execute(
-                "INSERT INTO quota_segment_message (group_id, segment_start, user_id, message, ts)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                rusqlite::params![group_id, segment_start, user_id, message, ts],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// 删除 `cutoff` 之前的段内消息；返回删除条数
-    pub(crate) fn quota_prune_messages(&self, cutoff: i64) -> Result<usize, DbError> {
-        self.with_conn(|conn| {
-            let removed = conn.execute(
-                "DELETE FROM quota_segment_message WHERE ts < ?1",
-                rusqlite::params![cutoff],
-            )?;
-            Ok(removed)
-        })
-    }
-
-    /// 某个群最近的若干段消息（段起始时间倒序）
-    pub(crate) fn quota_messages(
-        &self,
-        group_id: u64,
-        limit_segments: usize,
-    ) -> Result<Vec<QuotaMessage>, DbError> {
-        self.with_conn(|conn| {
-            let mut statement = conn.prepare(
-                "SELECT segment_start, user_id, message, ts FROM quota_segment_message
-                 WHERE group_id = ?1
-                   AND segment_start IN (
-                       SELECT DISTINCT segment_start FROM quota_segment_message
-                       WHERE group_id = ?1 ORDER BY segment_start DESC LIMIT ?2
-                   )
-                 ORDER BY segment_start DESC, id",
-            )?;
-            let rows =
-                statement.query_map(rusqlite::params![group_id, limit_segments as i64], |row| {
-                    Ok(QuotaMessage {
-                        segment_start: row.get(0)?,
-                        user_id: row.get(1)?,
-                        message: row.get(2)?,
-                        ts: row.get(3)?,
-                    })
-                })?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
-        })
-    }
-
-    /// 有段日志的群
-    pub(crate) fn quota_groups_with_messages(&self) -> Result<Vec<u64>, DbError> {
-        self.with_conn(|conn| {
-            let mut statement = conn
-                .prepare("SELECT DISTINCT group_id FROM quota_segment_message ORDER BY group_id")?;
-            let rows = statement.query_map([], |row| row.get(0))?;
-            let mut groups = Vec::new();
-            for group in rows {
-                groups.push(group?);
-            }
-            Ok(groups)
-        })
-    }
-
     /// 迁移用：直接写入一个段的计数（不做 +1）
     pub(crate) fn quota_set_segment_count(
         &self,
@@ -1082,8 +934,12 @@ impl Db {
         which: PerUserState,
         user_id: u64,
     ) -> Result<Option<String>, DbError> {
-        // 表名来自 `PerUserState::table()` 的固定字面量，不含外部输入
-        let sql = format!("SELECT state FROM {} WHERE user_id = ?1", which.table());
+        // 表名与列名都来自 `PerUserState` 的固定字面量，不含外部输入
+        let sql = format!(
+            "SELECT {} FROM {} WHERE user_id = ?1",
+            which.column(),
+            which.table()
+        );
         self.with_conn(|conn| {
             let found = conn
                 .query_row(&sql, rusqlite::params![user_id], |row| {
@@ -1102,9 +958,11 @@ impl Db {
         state: &str,
     ) -> Result<(), DbError> {
         let sql = format!(
-            "INSERT INTO {} (user_id, state, updated_at) VALUES (?1, ?2, ?3)
-             ON CONFLICT(user_id) DO UPDATE SET state = excluded.state, updated_at = excluded.updated_at",
-            which.table()
+            "INSERT INTO {table} (user_id, {column}, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(user_id) DO UPDATE SET {column} = excluded.{column},
+                                               updated_at = excluded.updated_at",
+            table = which.table(),
+            column = which.column(),
         );
         self.with_conn(|conn| {
             conn.execute(
@@ -1121,17 +979,14 @@ impl Db {
         which: PerUserState,
     ) -> Result<Vec<(u64, String)>, DbError> {
         let sql = format!(
-            "SELECT user_id, state FROM {} ORDER BY user_id",
+            "SELECT user_id, {} FROM {} ORDER BY user_id",
+            which.column(),
             which.table()
         );
         self.with_conn(|conn| {
             let mut statement = conn.prepare(&sql)?;
             let rows = statement.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -1189,11 +1044,7 @@ impl Db {
                     invalid: row.get::<_, i64>(2)? as u64,
                 })
             })?;
-            let mut stats = Vec::new();
-            for entry in rows {
-                stats.push(entry?);
-            }
-            Ok(stats)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 
@@ -1242,11 +1093,7 @@ impl Db {
                     created_at: row.get(3)?,
                 })
             })?;
-            let mut entries = Vec::new();
-            for entry in rows {
-                entries.push(entry?);
-            }
-            Ok(entries)
+            Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         })
     }
 }
@@ -1572,26 +1419,12 @@ pub(crate) fn migrate_legacy_quota() -> Result<usize, DbError> {
         segment_start: u64,
         count: u32,
     }
-    #[derive(serde::Deserialize)]
-    struct LegacyMessage {
-        user_id: u64,
-        message: String,
-        timestamp: u64,
-    }
-    #[derive(serde::Deserialize)]
-    struct LegacyLogEntry {
-        segment_start: u64,
-        #[serde(default)]
-        messages: Vec<LegacyMessage>,
-    }
     #[derive(serde::Deserialize, Default)]
     struct LegacyStore {
         #[serde(default)]
         date: String,
         #[serde(default)]
         counts: std::collections::HashMap<String, Vec<LegacyCount>>,
-        #[serde(default)]
-        segment_log: std::collections::HashMap<String, Vec<LegacyLogEntry>>,
     }
 
     let Some(dir) = crate::config::try_data_dir() else {
@@ -1615,23 +1448,6 @@ pub(crate) fn migrate_legacy_quota() -> Result<usize, DbError> {
         for count in counts {
             db.quota_set_segment_count(group_id, count.segment_start, count.count)?;
             imported += 1;
-        }
-    }
-    for (group_key, logs) in parsed.segment_log {
-        let Ok(group_id) = group_key.parse::<u64>() else {
-            continue;
-        };
-        for entry in logs {
-            for message in entry.messages {
-                db.quota_log_message(
-                    group_id,
-                    entry.segment_start,
-                    message.user_id,
-                    &message.message,
-                    message.timestamp as i64,
-                )?;
-                imported += 1;
-            }
         }
     }
     // 记录旧文件里的日期，避免同一天被当成"跨天"而清空刚导入的数据
@@ -1785,7 +1601,6 @@ mod tests {
             "cognitive_biases",
             "attention_state",
             "quota_segment",
-            "quota_segment_message",
             "quota_meta",
             "person",
             "relationship",
@@ -2016,5 +1831,46 @@ mod tests {
 
         db.set_emotion_states(&[]).expect("空批次必须是无操作");
         assert_eq!(db.emotion_user_count().expect("计数"), 2);
+    }
+
+    /// 每人一行的状态必须能读写：两张表的载荷列名并不相同
+    /// （`person.profile` / `relationship.state`）。
+    ///
+    /// 通用 SQL 曾经写死 `state`，于是人物档案在**新建库**上每次读写都报
+    /// `no such column`——而 `person_info` 与旧档案迁移都只 warn 兜底，
+    /// 于是"她认识谁"静默归零、迁移在第一个文件上就中断，测试却全绿。
+    /// 这里对两个变体各跑一遍读写列表计数，让列名跟错立刻变红。
+    #[test]
+    fn per_user_state_round_trips_on_both_tables() {
+        let db = Db::open_in_memory().expect("内存库");
+
+        for which in [PerUserState::Person, PerUserState::Relationship] {
+            assert_eq!(
+                db.per_user_state(which, 4242).expect("读"),
+                None,
+                "{which:?} 起初应当没有记录"
+            );
+
+            db.set_per_user_state(which, 4242, r#"{"user_id":4242}"#)
+                .expect("写入");
+            assert_eq!(
+                db.per_user_state(which, 4242).expect("读").as_deref(),
+                Some(r#"{"user_id":4242}"#),
+                "{which:?} 写进去的必须读得回来"
+            );
+
+            // UPSERT：同人再写是覆盖，不是第二行
+            db.set_per_user_state(which, 4242, "{}").expect("覆盖");
+            assert_eq!(
+                db.per_user_state(which, 4242).expect("读").as_deref(),
+                Some("{}"),
+                "{which:?} 覆盖失败"
+            );
+            assert_eq!(db.per_user_count(which).expect("计数"), 1);
+            assert_eq!(
+                db.all_per_user_states(which).expect("列表"),
+                vec![(4242, "{}".to_string())]
+            );
+        }
     }
 }

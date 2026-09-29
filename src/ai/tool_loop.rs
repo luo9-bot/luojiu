@@ -60,21 +60,18 @@ pub(crate) fn run_tool_loop(
         role: "system".to_string(),
         content: Some(system_prompt.to_string()),
         tool_calls: None,
-        reasoning_content: None,
     });
     for (role, content) in history {
         messages.push(ChatMessage {
             role: role.clone(),
             content: Some(content.clone()),
             tool_calls: None,
-            reasoning_content: None,
         });
     }
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: Some(user_content.to_string()),
         tool_calls: None,
-        reasoning_content: None,
     });
 
     // 泄漏守门用全局工具清单：模型可能把本次没提供给它的工具名
@@ -164,7 +161,6 @@ pub(crate) fn run_tool_loop(
                             "（你刚才调用了 {name}）\n[执行结果]\n{result}\n\n请继续：直接输出你要说的话（输出即发言），或调用 finish 保持沉默。"
                         )),
                         tool_calls: None,
-                        reasoning_content: None,
                     });
                 }
             }
@@ -213,7 +209,6 @@ pub(crate) fn run_tool_loop(
                     "（你把 {leaked} 的调用当成文字输出了——工具只能通过系统的工具调用机制使用，永远不能出现在发言文字里。）\n\n请继续：直接输出你要说的话（输出即发言），或通过工具调用机制调用 finish 保持沉默。"
                 )),
                 tool_calls: None,
-                reasoning_content: None,
             });
             continue;
         }

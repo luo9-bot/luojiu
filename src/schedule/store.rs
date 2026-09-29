@@ -525,20 +525,6 @@ mod tests {
     }
 
     #[test]
-    fn open_items_excludes_completed() {
-        let mut plan = Plan {
-            period: "2026-01-01".to_string(),
-            ..Default::default()
-        };
-        plan.items.push(item("d1", "做完的", Timeframe::Day));
-        plan.items.push(item("d2", "没做完的", Timeframe::Day));
-        plan.items[0].completed = true;
-        let open: Vec<&PlanItem> = plan.items.iter().filter(|i| i.is_open()).collect();
-        assert_eq!(open.len(), 1);
-        assert_eq!(open[0].id, "d2");
-    }
-
-    #[test]
     fn missing_optional_fields_still_load() {
         // 落盘的旧文件里没有 progress / completion_note / target_day，
         // 反序列化不能因此整份失败

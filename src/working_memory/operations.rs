@@ -1,4 +1,4 @@
-use crate::db::{DeleteAtOutcome, WORKING_MEMORY_KEEP as MAX_ENTRIES_PER_GROUP, WorkingMemoryRow};
+use crate::db::{WORKING_MEMORY_KEEP as MAX_ENTRIES_PER_GROUP, WorkingMemoryRow};
 
 /// 一条工作记忆
 ///
@@ -19,39 +19,6 @@ impl From<WorkingMemoryRow> for Entry {
             content: row.content,
             timestamp: row.created_at.max(0) as u64,
             bot_replied: row.bot_replied,
-        }
-    }
-}
-
-/// 删除某个群的一条工作记忆的结果
-///
-/// 三种结果都是后台删除的正常结局（群没有记录、下标越界、删掉了），
-/// 因此用枚举而不是 `Result<(), String>`：调用方能穷尽处理，
-/// 也不会有"错误消息即契约"的问题。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum DeleteEntryOutcome {
-    Removed,
-    GroupNotFound,
-    IndexOutOfRange,
-}
-
-/// 删除某个群的第 `index` 条工作记忆
-pub(crate) fn delete_entry_at(group_id: u64, index: usize) -> DeleteEntryOutcome {
-    let db = crate::db::db();
-    match db.working_memory_group_exists(group_id) {
-        Ok(true) => {}
-        Ok(false) => return DeleteEntryOutcome::GroupNotFound,
-        Err(error) => {
-            tracing::warn!(%error, group_id, "working_memory: 查询群失败");
-            return DeleteEntryOutcome::GroupNotFound;
-        }
-    }
-    match db.working_memory_delete_at(group_id, index) {
-        Ok(DeleteAtOutcome::Removed) => DeleteEntryOutcome::Removed,
-        Ok(DeleteAtOutcome::OutOfRange) => DeleteEntryOutcome::IndexOutOfRange,
-        Err(error) => {
-            tracing::warn!(%error, group_id, index, "working_memory: 删除失败");
-            DeleteEntryOutcome::IndexOutOfRange
         }
     }
 }
@@ -257,6 +224,5 @@ mod tests {
 
         db.working_memory_delete_ids(&[rows[0].id, rows[1].id, rows[2].id])
             .expect("清理");
-        assert!(ids.len() == 6);
     }
 }

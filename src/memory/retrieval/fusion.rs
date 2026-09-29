@@ -106,7 +106,6 @@ mod tests {
         Bm25Result {
             id: id.to_string(),
             score: 10.0 - rank as f64,
-            _matched_tokens: 1,
         }
     }
 

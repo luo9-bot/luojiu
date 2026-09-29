@@ -1,7 +1,6 @@
 use tracing::debug;
 
 use super::segment::{check_and_consume, has_quota};
-use super::store::{SegmentLogEntry, SegmentMessage};
 use crate::config;
 
 // ── 回复优先级 ───────────────────────────────────────────────
@@ -84,43 +83,4 @@ pub(crate) fn try_reply(
 
     debug!(user_id, group_id, priority, "quota: 配额耗尽，跳过回复");
     false
-}
-
-// ── Admin API ──────────────────────────────────────────────────
-
-/// 某个群最近若干段的段日志（段起始时间倒序）
-pub(crate) fn get_segment_logs(group_id: u64, limit: usize) -> Vec<SegmentLogEntry> {
-    let messages = crate::db::db()
-        .quota_messages(group_id, limit)
-        .unwrap_or_default();
-
-    // 记录已按「段倒序、段内按写入顺序」返回，这里保持该顺序分组
-    let mut entries: Vec<SegmentLogEntry> = Vec::new();
-    for row in messages {
-        match entries.last_mut() {
-            Some(entry) if entry.segment_start == row.segment_start => {
-                entry.messages.push(SegmentMessage {
-                    user_id: row.user_id,
-                    message: row.message,
-                    timestamp: row.ts.max(0) as u64,
-                });
-            }
-            _ => entries.push(SegmentLogEntry {
-                segment_start: row.segment_start,
-                messages: vec![SegmentMessage {
-                    user_id: row.user_id,
-                    message: row.message,
-                    timestamp: row.ts.max(0) as u64,
-                }],
-            }),
-        }
-    }
-    entries
-}
-
-/// 有段日志的群
-pub(crate) fn get_groups_with_logs() -> Vec<u64> {
-    crate::db::db()
-        .quota_groups_with_messages()
-        .unwrap_or_default()
 }

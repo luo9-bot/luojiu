@@ -128,13 +128,11 @@ pub(crate) fn epoch_days_to_ymd(mut days: u64) -> (u64, u32, u32) {
         30,
         31,
     ];
-    let mut month = 1u32;
-    for &dim in &md {
+    for (month, &dim) in (1u32..).zip(md.iter()) {
         if days < dim {
             return (y, month, days as u32 + 1);
         }
         days -= dim;
-        month += 1;
     }
     (y, 12, 31)
 }

@@ -68,6 +68,40 @@ pub(crate) fn default_data_path() -> PathBuf {
     to_absolute(&PathBuf::from("data").join("plugin_ai_chat"))
 }
 
+/// 配置文件读不出来（不存在/解析失败）时的兜底配置
+fn fallback_config() -> Config {
+    Config {
+        search: Default::default(),
+        api_key: String::new(),
+        base_url: "https://api.deepseek.com".into(),
+        model: "deepseek-chat".into(),
+        bot_name: default_bot_name(),
+        prompts: default_prompts(),
+        self_qq: 0,
+        admin_qq: 0,
+        darling_qq: 0,
+        ai: AiConfig::default(),
+        conversation: ConversationConfig::default(),
+        memory: MemoryConfig::default(),
+        emotion: EmotionConfig::default(),
+        proactive: ProactiveConfig::default(),
+        style: StyleConfig::default(),
+        vision: VisionConfig::default(),
+        embedding: EmbeddingConfig::default(),
+        messages: Messages::default(),
+        log: LogConfig::default(),
+        admin: AdminConfig::default(),
+        anti_injection: AntiInjectionConfig::default(),
+        quota: QuotaConfig::default(),
+        sticker: StickerConfig::default(),
+        whitelist: Vec::new(),
+        blacklist: Vec::new(),
+        auto_start_users: Vec::new(),
+        auto_start_groups: Vec::new(),
+        humanity: HumanityConfig::default(),
+    }
+}
+
 pub(crate) fn init() {
     let data_path = default_data_path();
     fs::create_dir_all(&data_path).ok();
@@ -90,70 +124,12 @@ pub(crate) fn init() {
                 let msg = format!("配置文件解析失败，已使用默认值: {}", e);
                 tracing::error!(path = ?config_path, error = %e, "{}", msg);
                 *CONFIG_ERROR.write_recover() = msg;
-                Config {
-                    search: Default::default(),
-                    api_key: String::new(),
-                    base_url: "https://api.deepseek.com".into(),
-                    model: "deepseek-chat".into(),
-                    bot_name: default_bot_name(),
-                    prompts: default_prompts(),
-                    self_qq: 0,
-                    admin_qq: 0,
-                    darling_qq: 0,
-                    ai: AiConfig::default(),
-                    conversation: ConversationConfig::default(),
-                    memory: MemoryConfig::default(),
-                    emotion: EmotionConfig::default(),
-                    proactive: ProactiveConfig::default(),
-                    style: StyleConfig::default(),
-                    vision: VisionConfig::default(),
-                    embedding: EmbeddingConfig::default(),
-                    messages: Messages::default(),
-                    log: LogConfig::default(),
-                    admin: AdminConfig::default(),
-                    anti_injection: AntiInjectionConfig::default(),
-                    quota: QuotaConfig::default(),
-                    sticker: StickerConfig::default(),
-                    whitelist: Vec::new(),
-                    blacklist: Vec::new(),
-                    auto_start_users: Vec::new(),
-                    auto_start_groups: Vec::new(),
-                    humanity: HumanityConfig::default(),
-                }
+                fallback_config()
             }
         },
         Err(e) => {
             debug!(path = ?config_path, error = %e, "failed to read config, using defaults");
-            Config {
-                search: Default::default(),
-                api_key: String::new(),
-                base_url: "https://api.deepseek.com".into(),
-                model: "deepseek-chat".into(),
-                bot_name: default_bot_name(),
-                prompts: default_prompts(),
-                self_qq: 0,
-                admin_qq: 0,
-                darling_qq: 0,
-                ai: AiConfig::default(),
-                conversation: ConversationConfig::default(),
-                memory: MemoryConfig::default(),
-                emotion: EmotionConfig::default(),
-                proactive: ProactiveConfig::default(),
-                style: StyleConfig::default(),
-                vision: VisionConfig::default(),
-                embedding: EmbeddingConfig::default(),
-                messages: Messages::default(),
-                log: LogConfig::default(),
-                admin: AdminConfig::default(),
-                anti_injection: AntiInjectionConfig::default(),
-                quota: QuotaConfig::default(),
-                sticker: StickerConfig::default(),
-                whitelist: Vec::new(),
-                blacklist: Vec::new(),
-                auto_start_users: Vec::new(),
-                auto_start_groups: Vec::new(),
-                humanity: HumanityConfig::default(),
-            }
+            fallback_config()
         }
     };
 

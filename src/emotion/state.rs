@@ -33,22 +33,15 @@ pub(crate) struct EmotionState {
     /// 情绪惯性——不会瞬间切换，越大越"固执"
     #[serde(default = "default_emotional_inertia")]
     pub inertia: f32,
-    /// 情绪触发链——是什么事件导致了当前情绪
-    #[serde(default)]
-    pub trigger_chain: Vec<EmotionTrigger>,
     /// 长期情绪基线（正值=乐观，负值=悲观）
     #[serde(default)]
     pub baseline: f32,
     /// 从负面情绪恢复的速度 (0.0-1.0)
     #[serde(default = "default_resilience")]
     pub resilience: f32,
-    /// 被他人情绪影响的程度 (0.0-1.0)
-    #[serde(default = "default_empathy_resonance")]
-    pub empathy_resonance: f32,
     pub last_update: u64,
     pub last_interaction: u64,
     pub interaction_rate: f32,
-    pub history: Vec<(EmotionType, u64)>,
     /// 最近一次检测到的危机等级
     #[serde(default)]
     pub crisis_level: CrisisLevel,
@@ -69,41 +62,6 @@ fn default_emotional_inertia() -> f32 {
 fn default_resilience() -> f32 {
     0.4
 }
-fn default_empathy_resonance() -> f32 {
-    0.3
-}
-
-/// 情绪触发事件
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct EmotionTrigger {
-    /// 触发类型
-    pub trigger_type: TriggerType,
-    /// 触发源描述
-    pub source: String,
-    /// 发生时间
-    pub timestamp: u64,
-    /// 导致的情绪
-    pub caused_emotion: EmotionType,
-    /// 触发强度
-    pub intensity: f32,
-}
-
-/// 情绪触发类型
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub(crate) enum TriggerType {
-    /// 用户说了什么
-    UserMessage,
-    /// 自我反思
-    SelfReflection,
-    /// 记忆唤起
-    MemoryRecall,
-    /// 环境/时间变化
-    Environmental,
-    /// 情绪感染（被他人情绪影响）
-    EmotionalContagion,
-    /// 内心独白
-    InnerThought,
-}
 
 impl EmotionState {
     /// 情绪动力学更新
@@ -112,10 +70,9 @@ impl EmotionState {
     /// 1. 自然衰减——所有情绪强度随时间向基线回归
     /// 2. 新刺激叠加（不是替换，是混合）
     /// 3. 基线引力——缓慢拉向人格决定的基线情绪
-    /// 4. 清理过期触发链
     pub(crate) fn update_emotional_dynamics(
         &mut self,
-        new_stimulus: Option<(&EmotionType, f32, &str, TriggerType)>,
+        new_stimulus: Option<(&EmotionType, f32)>,
         delta_secs: f32,
     ) {
         // 1. 自然衰减——向基线回归
@@ -130,7 +87,7 @@ impl EmotionState {
         }
 
         // 2. 新刺激叠加（混合而非替换）
-        if let Some((emotion, stim_intensity, source, trigger_type)) = new_stimulus {
+        if let Some((emotion, stim_intensity)) = new_stimulus {
             // 如果与当前情绪一致，加强
             if *emotion == self.current {
                 self.intensity = (self.intensity + stim_intensity * 0.3).min(1.0);
@@ -154,15 +111,6 @@ impl EmotionState {
                 // 弱刺激，仅微调
                 self.intensity = (self.intensity + stim_intensity * 0.05).min(1.0);
             }
-
-            // 记录触发链
-            self.trigger_chain.push(EmotionTrigger {
-                trigger_type,
-                source: source.to_string(),
-                timestamp: crate::util::now_secs(),
-                caused_emotion: *emotion,
-                intensity: stim_intensity,
-            });
         }
 
         // 3. 基线引力——缓慢拉向基线
@@ -188,11 +136,6 @@ impl EmotionState {
             }
         }
 
-        // 4. 清理过期触发链（保留2小时）
-        let now = crate::util::now_secs();
-        self.trigger_chain
-            .retain(|t| now.saturating_sub(t.timestamp) < 7200);
-
         self.last_update = crate::util::now_secs();
     }
 }
@@ -205,14 +148,11 @@ impl Default for EmotionState {
             secondary: None,
             intensity: 0.3,
             inertia: default_emotional_inertia(),
-            trigger_chain: Vec::new(),
             baseline: 0.1, // 轻微乐观
             resilience: default_resilience(),
-            empathy_resonance: default_empathy_resonance(),
             last_update: now,
             last_interaction: now,
             interaction_rate: 0.0,
-            history: Vec::new(),
             crisis_level: CrisisLevel::None,
             last_crisis_intervention: 0,
             crisis_clean_count: 0,

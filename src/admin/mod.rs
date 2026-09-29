@@ -168,10 +168,10 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
 
     match api_segs.first() {
         Some(&"memory") => handlers::handle_memory(&method, &api_segs[1..], &body),
-        Some(&"mind") => handlers::handle_mind(&method, &api_segs[1..], &body),
+        Some(&"mind") => handlers::handle_mind(&method, &api_segs[1..]),
         Some(&"working-memory") => handlers::handle_working_memory(&method, &api_segs[1..], &body),
         Some(&"backups") => handlers::handle_backups(&method, &api_segs[1..], &body),
-        Some(&"emotion") => handlers::handle_emotion(&method, &api_segs[1..], &body),
+        Some(&"emotion") => handlers::handle_emotion(&method, &api_segs[1..]),
         Some(&"blocklist") => handlers::handle_blocklist(&method, &api_segs[1..], &body),
         Some(&"archive") => {
             if method == Method::Get {
@@ -180,7 +180,7 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
                 err(405, "method not allowed")
             }
         }
-        Some(&"schedule") => handlers::handle_schedule(&method, &body),
+        Some(&"schedule") => handlers::handle_schedule(&method),
         Some(&"analytics") => handlers::handle_analytics(),
         Some(&"turn-shadow") => handlers::handle_turn_shadow(),
         Some(&"audit") => handlers::handle_audit(),
@@ -189,17 +189,9 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(&"config") => handlers::handle_config(&method, &api_segs[1..], &body),
         Some(&"quota") => handlers::handle_quota(&method, &api_segs[1..]),
         Some(&"sticker") => match api_segs.get(1).copied() {
-            Some(hash) if api_segs.get(2).copied() == Some("tags") && method == Method::Put => {
-                handlers::handle_sticker_tags(hash, &body)
-            }
-            Some(hash)
-                if api_segs.get(2).copied() == Some("description") && method == Method::Put =>
-            {
-                handlers::handle_sticker_description(hash, &body)
-            }
             Some(hash) if method == Method::Post => handlers::handle_sticker_toggle(hash),
-            Some(hash) if method == Method::Delete => handlers::handle_sticker_delete(hash),
-            _ => handlers::handle_sticker(),
+            _ if method == Method::Get => handlers::handle_sticker(),
+            _ => err(405, "method not allowed"),
         },
         Some(&"dashboard") => handlers::handle_dashboard(),
         Some(&"humanity") => handlers::handle_humanity(),

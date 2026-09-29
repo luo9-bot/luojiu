@@ -1,8 +1,8 @@
 //! 关系动力学系统
 //!
 //! 在人物档案基础上扩展为完整的关系模型。
-//! 模拟人类关系的自然演化：信任缓慢建立快速崩塌、亲密度有天花板、
-//! 缺席冷却、共享记忆和inside jokes。
+//! 模拟人类关系的自然演化：信任缓慢建立、亲密度有天花板、
+//! 共享记忆和inside jokes。
 
 use serde::{Deserialize, Serialize};
 use tracing::debug;
@@ -39,24 +39,6 @@ impl RelationshipType {
             Self::Admiring => "admiring",
         }
     }
-}
-
-/// 用户交流风格偏好
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub(crate) enum CommStyle {
-    /// 默认
-    #[default]
-    Default,
-    /// 喜欢直来直去
-    Direct,
-    /// 喜欢温柔委婉
-    Gentle,
-    /// 喜欢幽默
-    Humorous,
-    /// 喜欢简短
-    Brief,
-    /// 喜欢深入讨论
-    Deep,
 }
 
 /// 共享记忆 / inside joke
@@ -121,19 +103,10 @@ pub(crate) struct Relationship {
     pub curiosity: f32,
     /// 对用户的"印象"（自然语言）
     pub impression: String,
-    /// 用户喜欢的交流方式
-    pub communication_style: CommStyle,
     /// 共享经历、inside jokes
     pub shared_memories: Vec<SharedMemory>,
-    /// 感知到的用户态度
-    pub perceived_attitude: String,
     /// 上次交互时间
     pub last_interaction: u64,
-    /// 上次 bot 主动说话但没被回复的时间
-    #[serde(default)]
-    pub last_ignored_at: u64,
-    /// 缺席冷却速率
-    pub absence_cooling_rate: f32,
     /// 关系类型
     pub relationship_type: RelationshipType,
     /// 创建时间
@@ -176,12 +149,8 @@ impl Default for Relationship {
             annoyance: 0.0,
             curiosity: 0.3,
             impression: String::new(),
-            communication_style: CommStyle::Default,
             shared_memories: Vec::new(),
-            perceived_attitude: "neutral".to_string(),
             last_interaction: now,
-            last_ignored_at: 0,
-            absence_cooling_rate: 0.01,
             relationship_type: RelationshipType::Stranger,
             created_at: now,
             updated_at: now,
@@ -241,33 +210,23 @@ pub(crate) fn save_relationship(rel: &Relationship) {
 }
 
 /// 记录一次交互，更新关系动力学
-pub(crate) fn record_interaction(user_id: u64, positive: bool) {
+pub(crate) fn record_interaction(user_id: u64) {
     let mut rel = get_relationship(user_id);
     let now = crate::util::now_secs();
 
     rel.last_interaction = now;
     rel.interaction_count += 1;
+    rel.positive_interactions += 1;
 
-    if positive {
-        rel.positive_interactions += 1;
-    } else {
-        rel.negative_interactions += 1;
-    }
-
-    // 1. 信任更新（非对称：建立慢，崩塌快）
-    if positive {
-        rel.trust = (rel.trust + 0.01).min(1.0);
-    } else {
-        rel.trust = (rel.trust - 0.05).max(0.0);
-    }
+    // 1. 信任更新
+    rel.trust = (rel.trust + 0.01).min(1.0);
 
     // 2. 亲密度更新（天花板效应）
-    let intimacy_gain = if positive { 0.02 } else { -0.01 };
     let ceiling_factor = 1.0 - rel.intimacy * 0.8;
-    rel.intimacy = (rel.intimacy + intimacy_gain * ceiling_factor).clamp(0.0, 1.0);
+    rel.intimacy = (rel.intimacy + 0.02 * ceiling_factor).clamp(0.0, 1.0);
 
     // 3. 好感度更新
-    rel.affection = (rel.affection + if positive { 0.015 } else { -0.03 }).clamp(0.0, 1.0);
+    rel.affection = (rel.affection + 0.015).clamp(0.0, 1.0);
 
     // 4. 默契度更新（互动越多默契越高）
     if rel.interaction_count > 10 {
@@ -281,9 +240,7 @@ pub(crate) fn record_interaction(user_id: u64, positive: bool) {
     rel.annoyance = (rel.annoyance - 0.01).max(0.0);
 
     // 7. 好奇心：积极互动增加好奇心
-    if positive {
-        rel.curiosity = (rel.curiosity + 0.01).min(1.0);
-    }
+    rel.curiosity = (rel.curiosity + 0.01).min(1.0);
 
     // 8. 关系类型自动升级（考虑新维度）
     rel.relationship_type = compute_relationship_type(&rel);

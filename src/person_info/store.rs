@@ -14,11 +14,7 @@ use crate::db::PerUserState;
 pub(crate) struct PersonProfile {
     pub user_id: u64,
     pub person_name: String,
-    pub name_reason: String,
-    pub know_times: u32,
     pub know_since: u64,
-    pub last_know: u64,
-    pub memory_points: Vec<String>,
     pub group_nicknames: HashMap<u64, String>,
 }
 

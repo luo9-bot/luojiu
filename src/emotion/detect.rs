@@ -1,9 +1,9 @@
 use tracing::info;
 
-use super::state::{EmotionType, TriggerType, get_state, update_state};
+use super::state::{EmotionType, get_state, update_state};
 use crate::crisis::{detect_crisis, update_crisis};
 
-pub(crate) fn analyze_user_message(user_id: u64, message: &str) -> bool {
+pub(crate) fn analyze_user_message(user_id: u64, message: &str) {
     info!(user_id, message = %message.chars().take(30).collect::<String>(), "emotion: 分析用户消息");
     let mut state = get_state(user_id);
     let now = crate::util::now_secs();
@@ -18,32 +18,19 @@ pub(crate) fn analyze_user_message(user_id: u64, message: &str) -> bool {
     // 关键词检测情绪
     let (detected, delta) = detect_emotion(message);
     if delta > 0.1 {
-        // 截断消息作为source
-        let source: String = message.chars().take(30).collect();
-        state.update_emotional_dynamics(
-            Some((&detected, delta, &source, TriggerType::UserMessage)),
-            0.0,
-        );
+        state.update_emotional_dynamics(Some((&detected, delta)), 0.0);
     }
 
     // 高频互动带来正向情绪
     if state.interaction_rate > crate::config::get().emotion.affinity_threshold {
-        state.update_emotional_dynamics(
-            Some((
-                &EmotionType::Happy,
-                0.02,
-                "高频互动",
-                TriggerType::UserMessage,
-            )),
-            0.0,
-        );
+        state.update_emotional_dynamics(Some((&EmotionType::Happy, 0.02)), 0.0);
     }
 
     update_state(user_id, state);
 
     // 危机信号检测
     let crisis = detect_crisis(message);
-    update_crisis(user_id, crisis)
+    update_crisis(user_id, crisis);
 }
 
 fn detect_emotion(message: &str) -> (EmotionType, f32) {
@@ -90,11 +77,6 @@ fn detect_emotion(message: &str) -> (EmotionType, f32) {
             &["担心", "焦虑", "紧张", "害怕", "恐惧", "不安", "慌"],
             EmotionType::Worried,
             0.3,
-        ),
-        (
-            &["嗯", "哦", "这样", "好吧", "知道了", "了解"],
-            EmotionType::Neutral,
-            0.1,
         ),
         (
             &["想", "思考", "为什么", "怎么", "如何", "吗", "呢", "？"],

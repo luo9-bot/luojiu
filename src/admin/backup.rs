@@ -55,15 +55,17 @@ pub(crate) fn before_modify(data_type: &str) {
     if !src.exists() {
         return;
     }
-    let backup_dir = config::data_dir().join("backups").join(data_type);
-    std::fs::create_dir_all(&backup_dir).ok();
-    let ts = super::format_timestamp(crate::util::now_secs());
-    let name = format!("{}_{}.json", data_type, ts);
-    let dst = backup_dir.join(&name);
-    if std::fs::copy(&src, &dst).is_ok() {
-        debug!(data_type, backup = %name, "backup: created");
+    let Some(dst) = backup_target(data_type, "json") else {
+        return;
+    };
+    if std::fs::copy(&src, &dst).is_ok()
+        && let Some(name) = dst.file_name()
+    {
+        debug!(data_type, backup = %name.to_string_lossy(), "backup: created");
     }
-    prune(&backup_dir, 20);
+    if let Some(dir) = dst.parent() {
+        prune(dir, 20);
+    }
 }
 
 fn prune(dir: &Path, max_count: usize) {

@@ -57,18 +57,3 @@ pub(crate) fn check_and_consume(group_id: u64) -> bool {
         }
     }
 }
-
-// ── 段日志记录 ────────────────────────────────────────────────
-
-pub(crate) fn log_segment_message(group_id: u64, user_id: u64, message: &str) {
-    let segment_start = current_segment_start();
-    if let Err(error) = crate::db::db().quota_log_message(
-        group_id,
-        segment_start,
-        user_id,
-        message,
-        now_secs() as i64,
-    ) {
-        tracing::warn!(%error, group_id, "quota: 段日志写入失败");
-    }
-}

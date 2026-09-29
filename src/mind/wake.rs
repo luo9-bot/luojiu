@@ -197,19 +197,6 @@ pub(crate) fn all() -> Vec<WakePlan> {
     plans
 }
 
-/// 关闭（移除）一个想起（admin 手动操作）
-pub(crate) fn close(id: u64) -> bool {
-    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut plans = load_plans();
-    let before = plans.len();
-    remove_by_id(&mut plans, id);
-    let removed = plans.len() != before;
-    if removed {
-        save_plans(&plans);
-    }
-    removed
-}
-
 /// 她目前惦记的、关于某人的心事（原话列表，供感官包"你惦记的"字段）
 pub(crate) fn pending_reasons_for(user_id: u64) -> Vec<String> {
     let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -223,22 +210,6 @@ pub(crate) fn pending_reasons_for(user_id: u64) -> Vec<String> {
         })
         .map(|p| p.reason)
         .collect()
-}
-
-/// 零容忍清洗：清除与该用户相关的一切心事与待办
-pub(crate) fn purge_loops_about(uid: u64) {
-    let _guard = STORE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut plans = load_plans();
-    let before = plans.len();
-    plans.retain(|p| p.about_user != Some(uid) && p.target_user != Some(uid));
-    if plans.len() != before {
-        save_plans(&plans);
-        info!(
-            uid,
-            removed = before - plans.len(),
-            "wake: 零容忍清洗相关心事"
-        );
-    }
 }
 
 // ── 夜间门控：她真的睡了 ────────────────────────────────────────
@@ -544,25 +515,5 @@ mod tests {
         // 封顶一天，且不短于一分钟
         assert_eq!(backoff_secs(Urgency::Later, 20), 24 * 3600);
         assert!(backoff_secs(Urgency::Now, 0) >= 60);
-    }
-
-    #[test]
-    fn night_gating_wraps_midnight() {
-        // 直接验证 23-7 的逻辑分支（不依赖 config：单独复算）
-        let in_night = |hour: i32, start: i32, end: i32| {
-            if start == end {
-                false
-            } else if start < end {
-                hour >= start && hour < end
-            } else {
-                hour >= start || hour < end
-            }
-        };
-        assert!(in_night(23, 23, 7));
-        assert!(in_night(2, 23, 7));
-        assert!(in_night(6, 23, 7));
-        assert!(!in_night(7, 23, 7));
-        assert!(!in_night(12, 23, 7));
-        assert!(!in_night(22, 23, 7));
     }
 }

@@ -29,12 +29,6 @@ pub(crate) struct SharedState {
     pub group_history: HashMap<u64, Vec<(String, String)>>,
 }
 
-impl Default for SharedState {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl SharedState {
     pub(crate) fn new() -> Self {
         Self {

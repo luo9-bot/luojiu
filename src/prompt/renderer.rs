@@ -28,10 +28,10 @@ mod tests {
     #[test]
     fn test_render_simple() {
         let mut vars = HashMap::new();
-        vars.insert("name", "麦麦");
+        vars.insert("name", "洛玖");
         vars.insert("emotion", "开心");
         let result = PromptRenderer::render_simple("我叫{name}，今天很{emotion}", &vars);
-        assert_eq!(result, "我叫麦麦，今天很开心");
+        assert_eq!(result, "我叫洛玖，今天很开心");
     }
 
     #[test]

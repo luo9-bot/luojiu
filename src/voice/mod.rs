@@ -16,7 +16,7 @@ use tracing::{debug, info, warn};
 
 use crate::ai::{ALL_TOOL_NAMES, SilenceCause, Tool, ToolOutcome, Utterance, run_tool_loop};
 use crate::config;
-use crate::mind::{self};
+use crate::mind;
 
 /// 报告一次沉默
 ///
@@ -164,18 +164,16 @@ pub(crate) fn take_last_plan() -> Option<(u64, String)> {
     LAST_PLAN.with(|cell| cell.borrow_mut().take())
 }
 
-fn say_tool(allow_reply: bool) -> Tool {
+fn say_tool() -> Tool {
     let mut props = serde_json::Map::new();
     props.insert(
         "text".into(),
         serde_json::json!({"type": "string", "description": "要说的话"}),
     );
-    if allow_reply {
-        props.insert(
-            "reply_to".into(),
-            serde_json::json!({"type": "integer", "description": "（可选）要引用的那条消息的 id"}),
-        );
-    }
+    props.insert(
+        "reply_to".into(),
+        serde_json::json!({"type": "integer", "description": "（可选）要引用的那条消息的 id"}),
+    );
     Tool {
         tool_type: "function".to_string(),
         function: crate::ai::FunctionDef {
@@ -931,8 +929,8 @@ pub(crate) fn wake_think(input: &str, allow_speak: bool) -> WakeTurn {
     let phase1 = format!(
         "{input}\n\n先把此刻心里真实的活动写下来（1~3 条，每行一条，第一人称，像真的在想）。如果完全没什么可想的，就只回「没什么」。"
     );
-    let inner_text = match crate::ai::chat(&system, "", &[], &phase1) {
-        Ok((text, _)) => text,
+    let inner_text = match crate::ai::chat(&system, "", &phase1) {
+        Ok(text) => text,
         Err(e) => {
             info!(error = %e, "voice: wake phase1 failed");
             return WakeTurn {
@@ -961,7 +959,7 @@ pub(crate) fn wake_think(input: &str, allow_speak: bool) -> WakeTurn {
     }
 
     // 阶段二：决定行动
-    let mut decision_tools: Vec<Tool> = vec![say_tool(true), finish_tool(), plan_next_tool()];
+    let mut decision_tools: Vec<Tool> = vec![say_tool(), finish_tool(), plan_next_tool()];
     // 回神是她回看自己一天的时刻，也是她勾掉计划最自然的时机
     decision_tools.extend(plan_tools());
     if config::get().humanity.foraging_enabled {
@@ -1286,8 +1284,8 @@ pub(crate) fn digest_think(input: &str) -> DigestOutcome {
 
     // 阶段一：内心活动
     let phase1 = format!("{input}\n\n先把此刻心里真实的活动写下来（1~3 条，每行一条，第一人称）。");
-    let inner_text = match crate::ai::chat(&system, "", &[], &phase1) {
-        Ok((text, _)) => text,
+    let inner_text = match crate::ai::chat(&system, "", &phase1) {
+        Ok(text) => text,
         Err(e) => {
             info!(error = %e, "voice: digest phase1 failed");
             return DigestOutcome::default();
@@ -1543,12 +1541,16 @@ fn guard_voice_reply(reply: &str, bot_name: &str, tool_names: &[&str]) -> Option
         return None;
     }
 
-    // 逐段检查：一段工具泄漏 ⇒ 整轮不可信（判定与剔除的范围不同）
-    if let Some(leaked) = cleaned
+    let segments: Vec<&str> = cleaned
         .split("|^|")
         .flat_map(|s| s.split('\n'))
         .map(str::trim)
         .filter(|s| !s.is_empty())
+        .collect();
+
+    // 逐段检查：一段工具泄漏 ⇒ 整轮不可信（判定与剔除的范围不同）
+    if let Some(leaked) = segments
+        .iter()
         .find_map(|s| crate::ai::detect_leaked_tool_call(s, tool_names))
     {
         warn!(
@@ -1559,11 +1561,8 @@ fn guard_voice_reply(reply: &str, bot_name: &str, tool_names: &[&str]) -> Option
         return None;
     }
 
-    let kept: Vec<&str> = cleaned
-        .split("|^|")
-        .flat_map(|s| s.split('\n'))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
+    let kept: Vec<&str> = segments
+        .into_iter()
         .filter(|s| {
             if crate::ai::is_transcribed_echo(s) {
                 warn!(segment = %s, "voice: blocked transcribed echo in reply");

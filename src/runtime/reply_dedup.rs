@@ -62,12 +62,6 @@ pub(crate) struct ReplyDedupTracker {
     reply_text_hashes: VecDeque<u64>,
 }
 
-impl Default for ReplyDedupTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl ReplyDedupTracker {
     pub(crate) fn new() -> Self {
         Self {

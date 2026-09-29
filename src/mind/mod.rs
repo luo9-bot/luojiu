@@ -21,7 +21,6 @@ pub(crate) mod style;
 pub(crate) mod wake;
 pub(crate) mod wish;
 
-pub(crate) use persons::PersonFile;
 pub(crate) use sensation::{body_signals, transcribe_message};
 pub(crate) use stream::{
     StreamEvent, StreamKind, push_acted, push_digested, push_inner, recent, recent_text,

@@ -409,26 +409,6 @@ pub(crate) fn check_and_apply_auto_ban(user_id: u64, threshold: u32) -> bool {
     })
 }
 
-/// 手动封禁用户
-pub(crate) fn ban_user(user_id: u64) {
-    with_behavior_mut(user_id, |b| {
-        b.banned = true;
-        b.reputation.content = 0.0;
-        b.reputation.trust = 0.0;
-        b.vision_disabled = true;
-        info!(user_id, "用户已被手动封禁");
-    });
-}
-
-/// 手动静默封禁用户
-pub(crate) fn silent_ban_user(user_id: u64) {
-    with_behavior_mut(user_id, |b| {
-        b.silent_banned = true;
-        b.vision_disabled = true;
-        info!(user_id, "用户已被静默封禁");
-    });
-}
-
 /// 解封用户
 pub(crate) fn unban_user(user_id: u64) {
     with_behavior_mut(user_id, |b| {

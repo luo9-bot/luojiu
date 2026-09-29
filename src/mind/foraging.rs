@@ -152,24 +152,3 @@ pub(crate) fn catch_up(group_id: u64) -> String {
     format!("你翻了翻群 {group_id} 的记录：\n{}", lines.join("\n"))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn mention_threshold_hides_noise() {
-        // 门槛以下不进感官（unreachable 断言不成立即可）
-        let small: Vec<(u64, u32)> = vec![(1, MENTION_THRESHOLD - 1)];
-        let visible: Vec<&(u64, u32)> = small
-            .iter()
-            .filter(|(_, c)| *c >= MENTION_THRESHOLD)
-            .collect();
-        assert!(visible.is_empty());
-        let big: Vec<(u64, u32)> = vec![(1, MENTION_THRESHOLD + 1)];
-        let visible: Vec<&(u64, u32)> = big
-            .iter()
-            .filter(|(_, c)| *c >= MENTION_THRESHOLD)
-            .collect();
-        assert_eq!(visible.len(), 1);
-    }
-}

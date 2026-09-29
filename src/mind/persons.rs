@@ -58,8 +58,6 @@ pub(crate) struct PersonFile {
     #[serde(default)]
     pub want_to_say: Vec<String>,
     #[serde(default)]
-    pub seed: Option<PersonSeed>,
-    #[serde(default)]
     pub updated_at: u64,
 }
 
@@ -204,7 +202,6 @@ pub(crate) fn get(uid: u64) -> PersonFile {
         if file.mode.is_empty() {
             file.mode = seed.mode.clone();
         }
-        file.seed = Some(seed);
     }
     file
 }
@@ -234,16 +231,6 @@ pub(crate) fn all() -> Vec<(u64, PersonFile)> {
             Some((uid, get(uid)))
         })
         .collect()
-}
-
-/// 零容忍清洗：清除与该用户相关的待办牵挂（TA的印象与记忆保留——那是事实）
-pub(crate) fn purge_user_want_to_say(uid: u64) {
-    let mut file = get(uid);
-    if file.want_to_say.is_empty() {
-        return;
-    }
-    file.want_to_say.clear();
-    save(uid, &file);
 }
 
 #[cfg(test)]
