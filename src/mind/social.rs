@@ -791,14 +791,16 @@ fn participant_name(state: &SocialState, uid: u64, self_qq: u64) -> String {
     if uid == self_qq {
         return "你".to_string();
     }
-    // 转述里出现过的名字优先，否则退回 uid
-    state
+    // QQ 号是身份锚点，名字只是展示信息。即使昵称相同/改变，也必须能
+    // 从社会感知块中明确区分不同的人。
+    let name = state
         .topics
         .iter()
         .flat_map(|t| t.transcript.iter())
         .find(|l| l.speaker == uid && !l.name.is_empty())
-        .map(|l| l.name.clone())
-        .unwrap_or_else(|| uid.to_string())
+        .map(|l| l.name.as_str())
+        .unwrap_or("群友");
+    format!("[QQ:{uid}|{name}]")
 }
 
 /// 达到"值得提起"档位的 bond 对（取前三）
