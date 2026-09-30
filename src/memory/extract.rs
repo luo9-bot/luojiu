@@ -118,7 +118,10 @@ pub(crate) fn ai_extract(
     for (role, content) in recent.iter().rev() {
         context_parts.push(format!("[{}] {}", role, content));
     }
-    context_parts.push(format!("[user] {}", user_message));
+    context_parts.push(format!(
+        "[QQ:{}][user] {}",
+        user_id, user_message
+    ));
     context_parts.push(format!("[assistant] {}", ai_reply));
     let content = context_parts.join("\n");
 
