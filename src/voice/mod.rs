@@ -623,7 +623,10 @@ fn scene_line(
             .iter()
             .map(|&uid| (uid, display_name(uid, group_id)))
             .collect();
-        let names: Vec<&str> = named.iter().map(|(_, n)| n.as_str()).collect();
+        let names: Vec<String> = named
+            .iter()
+            .map(|(uid, n)| format!("[QQ:{uid}|{n}]"))
+            .collect();
         let mut text = format!(
             "# 现在的场景\n你在群 {group_id} 里。这轮说话的人：{}。",
             names.join("、")
@@ -755,7 +758,12 @@ pub(crate) fn speak_group(
 
     let new_lines: Vec<String> = utterances
         .iter()
-        .map(|u| mind::transcribe_message(&display_name(u.user_id, group_id), u.ts, &u.text, false))
+        .map(|u| {
+            // QQ 号是唯一身份，display_name 只是辅助阅读；即使两个群友同名，
+            // 模型也能通过 QQ 号稳定区分他们。
+            let speaker = format!("[QQ:{}|{}]", u.user_id, display_name(u.user_id, group_id));
+            mind::transcribe_message(&speaker, u.ts, &u.text, false)
+        })
         .collect();
 
     let cfg = config::get();
