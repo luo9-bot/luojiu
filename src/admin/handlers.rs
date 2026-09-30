@@ -326,6 +326,13 @@ pub(crate) fn handle_emotion(
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     match method {
         Method::Get => {
+            // 控制总览的 3D 核心驱动数据：四维情绪向量聚合
+            if segs.first() == Some(&"core") {
+                return match emotion_core_json() {
+                    Ok(body) => ok(body),
+                    Err(error) => err(500, &format!("聚合情绪核心失败: {error}")),
+                };
+            }
             // 情绪状态已迁入状态库（按用户一行）：不能再读 emotion.json，
             // 那个文件已经退休，读它只会拿到过期内容
             let mut view = serde_json::Map::new();
@@ -358,6 +365,226 @@ pub(crate) fn handle_emotion(
         }
         _ => err(405, "method not allowed"),
     }
+}
+
+// ── Handler: 情绪核心（控制总览的四维向量） ────────────────────
+
+/// 情绪类型 → (愉悦, 好奇, 共情, 压力) 贡献权重
+fn emotion_vector(e: &crate::emotion::EmotionType) -> [f32; 4] {
+    use crate::emotion::EmotionType::*;
+    match e {
+        Happy => [1.0, 0.1, 0.4, 0.0],
+        Excited => [0.9, 0.6, 0.1, 0.15],
+        Like => [0.8, 0.2, 0.8, 0.0],
+        Shy => [0.4, 0.1, 0.7, 0.15],
+        Surprised => [0.3, 0.9, 0.1, 0.25],
+        Thinking => [0.2, 1.0, 0.2, 0.1],
+        Neutral => [0.55, 0.3, 0.4, 0.1],
+        Sad => [0.0, 0.1, 0.5, 0.7],
+        Angry => [0.0, 0.1, 0.1, 0.9],
+        Worried => [0.1, 0.2, 0.4, 0.85],
+        Tired => [0.2, 0.1, 0.3, 0.55],
+    }
+}
+
+fn clamp01(v: f32) -> f32 {
+    v.clamp(0.0, 1.0)
+}
+
+/// 聚合全员情绪 + 关系 + 身体信号，产出控制总览所需的四维向量与仪表指标
+///
+/// - 愉悦 = 全员情绪加权愉悦 0.65 + 关系好感 0.35
+/// - 好奇 = 全员情绪加权好奇 0.5 + 关系好奇心均值 0.5
+/// - 共情 = 全员情绪加权共情 0.5 + (好感+信任+互惠)/3 0.5
+/// - 压力 = 全员情绪加权压力 0.55 + (紧张+烦躁)/2 0.25 + (1-社交余量) 0.20，
+///         有危机记录时抬底
+/// - coherence = 平静/正面情绪的质量占比；entropy = 情绪分布香农熵(归一化)；
+///   resonance = 平均互动频率归一化
+fn emotion_core_json() -> Result<serde_json::Value, String> {
+    let db = crate::db::db();
+
+    // ── 1. 全员情绪状态 ──
+    let states = db.all_emotion_states().map_err(|e| e.to_string())?;
+    let mut sum = [0.0f32; 4];
+    let mut weight_total = 0.0f32;
+    let mut type_mass: std::collections::BTreeMap<String, f32> = std::collections::BTreeMap::new();
+    let mut positive_mass = 0.0f32;
+    let mut rate_sum = 0.0f32;
+    let mut rate_n = 0usize;
+    let mut crisis_hits = 0usize;
+    let mut users = 0usize;
+    let mut self_state: Option<serde_json::Value> = None;
+
+    for (uid, json) in &states {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+            continue;
+        };
+        let Ok(etype) = serde_json::from_value::<crate::emotion::EmotionType>(
+            v.get("current").cloned().unwrap_or(serde_json::Value::Null),
+        ) else {
+            continue;
+        };
+        users += 1;
+        let intensity = v
+            .get("intensity")
+            .and_then(|x| x.as_f64())
+            .unwrap_or(0.3) as f32;
+        let w = intensity.max(0.05);
+        let vec = emotion_vector(&etype);
+        for i in 0..4 {
+            sum[i] += vec[i] * w;
+        }
+        weight_total += w;
+        *type_mass.entry(format!("{:?}", etype)).or_insert(0.0) += w;
+        positive_mass += vec[0] * w;
+        if let Some(rate) = v.get("interaction_rate").and_then(|x| x.as_f64()) {
+            rate_sum += rate as f32;
+            rate_n += 1;
+        }
+        if let Some(level) = v.get("crisis_level").and_then(|x| x.as_str()) {
+            if level != "None" {
+                crisis_hits += 1;
+            }
+        }
+        if *uid == 0 {
+            self_state = Some(v);
+        }
+    }
+
+    let (emo_joy, emo_cur, emo_emp, emo_stress) = if weight_total > 0.0 {
+        (
+            sum[0] / weight_total,
+            sum[1] / weight_total,
+            sum[2] / weight_total,
+            sum[3] / weight_total,
+        )
+    } else {
+        // 无任何情绪数据时的静息值
+        (0.55, 0.40, 0.50, 0.20)
+    };
+
+    // ── 2. 关系维度 ──
+    let rels = db
+        .all_per_user_states(crate::db::PerUserState::Relationship)
+        .map_err(|e| e.to_string())?;
+    let (mut cur_sum, mut aff_sum, mut trust_sum, mut recp_sum, mut tens_sum, mut annoy_sum) =
+        (0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32, 0.0f32);
+    let mut rel_n = 0usize;
+    for (_, json) in &rels {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
+            continue;
+        };
+        let num = |k: &str| v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0) as f32;
+        cur_sum += num("curiosity");
+        aff_sum += num("affection");
+        trust_sum += num("trust");
+        recp_sum += num("reciprocity");
+        tens_sum += num("tension");
+        annoy_sum += num("annoyance");
+        rel_n += 1;
+    }
+    let rel_avg = |sum: f32| -> f32 {
+        if rel_n > 0 {
+            sum / rel_n as f32
+        } else {
+            0.0
+        }
+    };
+    let (curiosity_rel, affection, trust, reciprocity, tension, annoyance) = (
+        rel_avg(cur_sum),
+        rel_avg(aff_sum),
+        rel_avg(trust_sum),
+        rel_avg(recp_sum),
+        rel_avg(tens_sum),
+        rel_avg(annoy_sum),
+    );
+    // 无关系数据时的默认好感/信任/互惠（让四维仍有合理落点）
+    let (affinity, trust_v, reciprocity_v) = if rel_n > 0 {
+        (affection, trust, reciprocity)
+    } else {
+        (0.55, 0.5, 0.5)
+    };
+
+    // ── 3. 身体信号（精力/社交余量） ──
+    let signals = crate::mind::body_signals();
+    let signal_level = |name: &str| -> Option<f32> {
+        signals
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.level.clamp(0.0, 1.0))
+    };
+    let battery = signal_level("社交余量");
+    let energy = signal_level("精力");
+
+    // ── 4. 四维融合 ──
+    let mut joy = clamp01(0.65 * emo_joy + 0.35 * affinity);
+    let curiosity = clamp01(0.5 * emo_cur + 0.5 * if rel_n > 0 { curiosity_rel } else { 0.4 });
+    let empathy = clamp01(
+        0.5 * emo_emp + 0.5 * (affinity + trust_v + reciprocity_v) / 3.0,
+    );
+    let battery_stress = 1.0 - battery.unwrap_or(0.5);
+    let mut stress = clamp01(0.55 * emo_stress + 0.25 * (tension + annoyance) / 2.0 + 0.20 * battery_stress);
+    if crisis_hits > 0 {
+        stress = stress.max(0.6);
+    }
+
+    // ── 5. 仪表指标 ──
+    let total_mass: f32 = type_mass.values().sum();
+    let entropy_norm = if total_mass > 0.0 && type_mass.len() > 1 {
+        let h: f32 = type_mass
+            .values()
+            .map(|m| {
+                let p = m / total_mass;
+                -p * p.ln()
+            })
+            .sum();
+        clamp01(h / 11f32.ln())
+    } else {
+        0.0
+    };
+    let coherence = if weight_total > 0.0 {
+        clamp01(positive_mass / weight_total)
+    } else {
+        0.6
+    };
+    let resonance = if rate_n > 0 {
+        clamp01(rate_sum / rate_n as f32 / 3.0)
+    } else {
+        0.4
+    };
+
+    // 自身情绪（uid=0）作为前端状态标签；无记录时用 Neutral
+    let self_current = self_state
+        .as_ref()
+        .and_then(|v| v.get("current"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("Neutral")
+        .to_string();
+    let self_intensity = self_state
+        .as_ref()
+        .and_then(|v| v.get("intensity"))
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.3);
+    // 愉悦过低时（全员低落）给一个下限，避免核心完全熄灭
+    joy = joy.max(0.08);
+
+    Ok(serde_json::json!({
+        "joy": joy,
+        "curiosity": curiosity,
+        "empathy": empathy,
+        "stress": stress,
+        "coherence": coherence,
+        "resonance": resonance,
+        "entropy": entropy_norm,
+        "energy": energy,
+        "battery": battery,
+        "state": self_current,
+        "state_intensity": self_intensity,
+        "users": users,
+        "relationships": rel_n,
+        "crisis": crisis_hits,
+        "updated": crate::util::now_secs(),
+    }))
 }
 
 // ── Handler: 黑名单 ──────────────────────────────────────────
