@@ -468,7 +468,12 @@ pub extern "C" fn plugin_main() {
                     );
                 }
                 MsgType::Private => {
-                    conversation::handle_private_msg(msg.user_id, &msg.message);
+                    conversation::handle_private_msg(
+                        msg.user_id,
+                        msg.sender.as_ref().map(|s| s.nickname.as_str()),
+                        msg.sender.as_ref().map(|s| s.card.as_str()),
+                        &msg.message,
+                    );
                 }
                 _ => {}
             }
