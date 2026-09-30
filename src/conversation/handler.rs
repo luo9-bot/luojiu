@@ -406,11 +406,12 @@ fn record_group_history(group_id: u64, utterances: &[GroupUtterance], max_histor
         };
         let name = crate::person_info::get_display_name(u.user_id, group_id)
             .unwrap_or_else(|| "群友".to_string());
+        // QQ 号是不可变的唯一身份；昵称只是展示信息，不能作为模型识别用户的 key。
         with_shared_state(|s| {
             s.push_group_history(
                 group_id,
                 "user",
-                &format!("[{name}] {stored}"),
+                &format!("[QQ:{}|{}] {}", u.user_id, name, stored),
                 max_history,
             );
         });
