@@ -240,9 +240,17 @@ pub(crate) fn handle_group_msg(
     batches(|b| b.append(group_id, user_id, trimmed, entry_id));
 }
 
-pub(crate) fn handle_private_msg(user_id: u64, msg: &str) {
+pub(crate) fn handle_private_msg(
+    user_id: u64,
+    nickname: Option<&str>,
+    card: Option<&str>,
+    msg: &str,
+) {
     let trimmed = msg.trim();
     info!(user_id, content = trimmed, "recv: private msg");
+
+    // 私聊同样记录 SDK 提供的 QQ 昵称，避免只有群聊才具备平台侧身份信息。
+    crate::person_info::update_qq_identity(user_id, 0, nickname, card);
 
     // ── 自身消息处理：记录到工作记忆，但不触发回复 ──
     let self_qq = config::get().self_qq;
