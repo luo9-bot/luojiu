@@ -109,9 +109,9 @@ impl PersonFile {
 
 // ── 展示名与聊天注入 ────────────────────────────────────────────
 
-/// 展示名：档案里的名字（含创作者种子）优先，其次档案称呼
+/// 展示名：档案里的名字（含创作者种子）优先，其次档案称呼。
 ///
-/// 是"谁在说话/关于谁"的权威解析入口——她认人靠的是这里，不是原始 QQ 号。
+/// QQ 号才是身份本身；展示名只负责让提示词更易读，不能用于唯一识别用户。
 pub(crate) fn display_name_or_address(uid: u64) -> Option<String> {
     let file = get(uid);
     if !file.display_name.is_empty() {
@@ -138,9 +138,9 @@ pub(crate) fn context_block(involved: &[u64]) -> Option<String> {
     }
     let lines: Vec<String> = uids
         .iter()
-        .map(|&uid| get(uid))
-        .filter(PersonFile::has_content)
-        .map(|file| file.summary_for_prompt())
+        .map(|&uid| (uid, get(uid)))
+        .filter(|(_, file)| file.has_content())
+        .map(|(uid, file)| format!("[QQ:{uid}] {}", file.summary_for_prompt()))
         .collect();
     if lines.is_empty() {
         return None;
