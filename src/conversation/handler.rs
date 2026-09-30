@@ -404,14 +404,15 @@ fn record_group_history(group_id: u64, utterances: &[GroupUtterance], max_histor
         } else {
             text_only
         };
-        let name = crate::person_info::get_display_name(u.user_id, group_id)
-            .unwrap_or_else(|| "群友".to_string());
-        // QQ 号是不可变的唯一身份；昵称只是展示信息，不能作为模型识别用户的 key。
+        let identity = crate::person_info::get_identity_label(u.user_id, group_id)
+            .unwrap_or_else(|| format!("[QQ:{}]", u.user_id));
+        // 群聊历史同时提供稳定 QQ 身份、当前 QQ 昵称/群名片，以及 AI 已形成的认知，
+        // 让模型不会只凭认知名称猜测消息来自谁。
         with_shared_state(|s| {
             s.push_group_history(
                 group_id,
                 "user",
-                &format!("[QQ:{}|{}] {}", u.user_id, name, stored),
+                &format!("{} {}", identity, stored),
                 max_history,
             );
         });

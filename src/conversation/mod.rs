@@ -32,9 +32,20 @@ fn enforce_zero_tolerance(user_id: u64, action: &crate::anti_injection::Action, 
     warn!(user_id, ?action, "高风险消息已拦截，未自动加入永久黑名单");
 }
 
-pub(crate) fn handle_group_msg(group_id: u64, user_id: u64, msg: &str) {
+pub(crate) fn handle_group_msg(
+    group_id: u64,
+    user_id: u64,
+    nickname: Option<&str>,
+    card: Option<&str>,
+    msg: &str,
+) {
     let trimmed = msg.trim();
     info!(user_id, group_id, content = trimmed, "recv: group msg");
+
+    // SDK 0.8.0-beta.2 已将 QQ sender.nickname/card 传入消息载荷。
+    // QQ 号是稳定身份，昵称和群名片是可变展示属性；先保存原始平台身份，
+    // 再让 AI 的长期认知参与自然语言称呼。
+    crate::person_info::update_qq_identity(user_id, group_id, nickname, card);
 
     // ── 自身消息处理：记录到工作记忆，但不触发回复 ──
     let self_qq = config::get().self_qq;
@@ -181,7 +192,7 @@ pub(crate) fn handle_group_msg(group_id: u64, user_id: u64, msg: &str) {
     );
 
     // ── 训练数据留档：人类说话语料（防注入放行的才进库） ──
-    let archive_name = crate::person_info::get_display_name(user_id, group_id).unwrap_or_default();
+    let archive_name = crate::person_info::get_identity_label(user_id, group_id).unwrap_or_default();
     crate::mind::archive::record_message(
         group_id,
         user_id,
@@ -229,9 +240,17 @@ pub(crate) fn handle_group_msg(group_id: u64, user_id: u64, msg: &str) {
     batches(|b| b.append(group_id, user_id, trimmed, entry_id));
 }
 
-pub(crate) fn handle_private_msg(user_id: u64, msg: &str) {
+pub(crate) fn handle_private_msg(
+    user_id: u64,
+    nickname: Option<&str>,
+    card: Option<&str>,
+    msg: &str,
+) {
     let trimmed = msg.trim();
     info!(user_id, content = trimmed, "recv: private msg");
+
+    // 私聊同样记录 SDK 提供的 QQ 昵称，避免只有群聊才具备平台侧身份信息。
+    crate::person_info::update_qq_identity(user_id, 0, nickname, card);
 
     // ── 自身消息处理：记录到工作记忆，但不触发回复 ──
     let self_qq = config::get().self_qq;
