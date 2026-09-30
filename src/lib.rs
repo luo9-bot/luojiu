@@ -462,6 +462,8 @@ pub extern "C" fn plugin_main() {
                     conversation::handle_group_msg(
                         msg.group_id.unwrap_or(0),
                         msg.user_id,
+                        msg.sender.as_ref().map(|s| s.nickname.as_str()),
+                        msg.sender.as_ref().map(|s| s.card.as_str()),
                         &msg.message,
                     );
                 }
