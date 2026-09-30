@@ -15,6 +15,9 @@ pub(crate) struct PersonProfile {
     pub user_id: u64,
     pub person_name: String,
     pub know_since: u64,
+    /// QQ 官方昵称（消息 sender.nickname），不作为稳定身份 key。
+    pub qq_nickname: String,
+    /// 群名片/群内展示名；key 为 group_id。
     pub group_nicknames: HashMap<u64, String>,
 }
 
