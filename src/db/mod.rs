@@ -567,11 +567,11 @@ impl Db {
     ) -> Result<Vec<(u64, WorkingMemoryRow)>, DbError> {
         self.with_conn(|conn| {
             let mut statement = conn.prepare(
-                "SELECT group_id, id, user_id, content, created_at, bot_replied FROM working_memory
+                "SELECT id, user_id, content, created_at, bot_replied, group_id FROM working_memory
                  WHERE created_at <= ?1 ORDER BY group_id, id",
             )?;
             let rows = statement.query_map(rusqlite::params![cutoff], |row| {
-                let group_id: u64 = row.get(0)?;
+                let group_id: u64 = row.get(5)?;
                 Ok((group_id, read_working_memory_row(row)?))
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -615,11 +615,11 @@ impl Db {
     ) -> Result<Vec<(u64, Vec<WorkingMemoryRow>)>, DbError> {
         self.with_conn(|conn| {
             let mut statement = conn.prepare(
-                "SELECT group_id, id, user_id, content, created_at, bot_replied FROM working_memory
+                "SELECT id, user_id, content, created_at, bot_replied, group_id FROM working_memory
                  ORDER BY group_id, id",
             )?;
             let rows = statement.query_map([], |row| {
-                let group_id: u64 = row.get(0)?;
+                let group_id: u64 = row.get(5)?;
                 Ok((group_id, read_working_memory_row(row)?))
             })?;
 
@@ -1617,6 +1617,35 @@ mod tests {
                 .expect("查询 sqlite_master");
             assert_eq!(found, 1, "schema 缺少表 {table}");
         }
+    }
+
+    #[test]
+    fn working_memory_group_queries_read_columns_in_the_expected_order() {
+        let db = Db::open_in_memory().expect("内存库");
+        db.with_conn(|conn| {
+            insert_working_memory(conn, 20, 202, "expired", 10, false, 200)?;
+            insert_working_memory(conn, 10, 101, "recent", 30, true, 200)?;
+            Ok(())
+        })
+        .expect("写入工作记忆");
+
+        let expired = db.working_memory_expired(20).expect("查询过期条目");
+        assert_eq!(expired.len(), 1);
+        assert_eq!(expired[0].0, 20);
+        assert!(expired[0].1.id > 0);
+        assert_eq!(expired[0].1.user_id, 202);
+        assert_eq!(expired[0].1.content, "expired");
+        assert_eq!(expired[0].1.created_at, 10);
+        assert!(!expired[0].1.bot_replied);
+
+        let groups = db.working_memory_groups().expect("查询分组条目");
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, 10);
+        assert_eq!(groups[0].1[0].user_id, 101);
+        assert_eq!(groups[0].1[0].content, "recent");
+        assert_eq!(groups[1].0, 20);
+        assert_eq!(groups[1].1[0].user_id, 202);
+        assert_eq!(groups[1].1[0].content, "expired");
     }
 
     /// 文件库路径必须可用，且**跨重开保持数据**。

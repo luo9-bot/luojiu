@@ -3,10 +3,69 @@ use std::time::Instant;
 
 use super::shared::CtxKey;
 
-/// 消息批次 (合并短时间内连续消息)
+/// 聚合策略：一段时间里说的话要凑成一批，一次交给她看
+///
+/// 早先批次按 (群, 用户) 各自 `batch_timeout_ms` 到期，于是同一个人
+/// 隔 3 秒说的三句话被切成三个轮次、各回一句——"一句一句地回"就是
+/// 这么来的。现在按**对话流**（同一个人的私聊 / 同一个群）聚合：
+/// 一段话没说完就继续等，说完了整批一起看，让她自己决定接哪几条。
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CoalescePolicy {
+    /// 静默窗口：这个对话流安静多久，就算"这段话说完了"
+    pub quiet_ms: u64,
+    /// 硬上限：最老的一条等了多久，哪怕还在刷屏也要先看一眼
+    pub max_wait_ms: u64,
+}
+
+/// 对话流：聚合的粒度是"一段正在进行的对话"，不是"某个人"
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum StreamKey {
+    Group(u64),
+    Private(u64),
+}
+
+impl StreamKey {
+    fn of(key: CtxKey) -> Self {
+        match key {
+            (group, _) if group > 0 => Self::Group(group),
+            (_, user) => Self::Private(user),
+        }
+    }
+}
+
+/// 一个对话流此刻的聚合现场
+struct StreamSnapshot {
+    /// 流里最老一条的到达时刻
+    oldest: Instant,
+    /// 流里最新一条的到达时刻
+    newest: Instant,
+    /// 有没有人点名找她——被点名不等窗口
+    urgent: bool,
+}
+
+impl StreamSnapshot {
+    fn absorb(&mut self, batch: &MessageBatch) {
+        self.oldest = self.oldest.min(batch.created);
+        self.newest = self.newest.max(batch.last_update);
+        self.urgent |= batch.urgent;
+    }
+
+    /// 这段话是不是已经"说完了"，或者再不看就太迟钝了
+    fn is_ready(&self, now: Instant, policy: CoalescePolicy) -> bool {
+        self.urgent
+            || now.duration_since(self.newest).as_millis() >= policy.quiet_ms as u128
+            || now.duration_since(self.oldest).as_millis() >= policy.max_wait_ms as u128
+    }
+}
+
+/// 消息批次 (合并一段时间内的连续消息)
 pub(crate) struct MessageBatch {
     pub messages: String,
+    /// 这批第一条的到达时刻——硬上限从这里起算
+    pub created: Instant,
     pub last_update: Instant,
+    /// 有人点名找她（@ 或叫名字）：整批立刻交出去，不等静默窗口
+    pub urgent: bool,
     /// 每条消息对应的写入时间戳 (unix秒)，用于精确匹配工作记忆条目
     pub entry_ids: Vec<u64>,
     /// 每条消息的到达时刻（unix 秒）——批次合并后用于还原真实发言顺序
@@ -64,7 +123,7 @@ pub(crate) struct BatchBuffer {
 }
 
 impl BatchBuffer {
-    pub(crate) fn append(&mut self, group_id: u64, user_id: u64, message: &str, entry_id: u64) {
+    pub(crate) fn append(&mut self, group_id: u64, user_id: u64, message: &str, entry_id: u64, urgent: bool) {
         let key: CtxKey = (group_id, user_id);
         let now = Instant::now();
         let arrived = crate::util::now_secs();
@@ -73,6 +132,7 @@ impl BatchBuffer {
             batch.messages.push('\n');
             batch.messages.push_str(message);
             batch.last_update = now;
+            batch.urgent |= urgent;
             batch.entry_ids.push(entry_id);
             batch.arrived_at.push(arrived);
             batch.arrived_at_ms.push(arrived_ms);
@@ -81,7 +141,9 @@ impl BatchBuffer {
                 key,
                 MessageBatch {
                     messages: message.to_string(),
+                    created: now,
                     last_update: now,
+                    urgent,
                     entry_ids: vec![entry_id],
                     arrived_at: vec![arrived],
                     arrived_at_ms: vec![arrived_ms],
@@ -90,24 +152,46 @@ impl BatchBuffer {
         }
     }
 
-    /// 取出所有已到期、且未被 `is_busy` 认领的批次
+    /// 各对话流此刻的聚合现场（只统计未被 `is_busy` 认领的批次）
+    fn stream_summaries(&self, is_busy: &impl Fn(CtxKey) -> bool) -> HashMap<StreamKey, StreamSnapshot> {
+        self.batches
+            .iter()
+            .filter(|(key, _)| !is_busy(**key))
+            .fold(HashMap::new(), |mut snapshots, (&key, batch)| {
+                snapshots
+                    .entry(StreamKey::of(key))
+                    .and_modify(|snapshot| snapshot.absorb(batch))
+                    .or_insert(StreamSnapshot {
+                        oldest: batch.created,
+                        newest: batch.last_update,
+                        urgent: batch.urgent,
+                    });
+                snapshots
+            })
+    }
+
+    /// 取出所有"这段话说完了"（或被点名、或等太久）的批次
     ///
     /// 一次性取出（而非逐个回调）是为了让调用方在**不持有缓冲借用**的情况下
     /// 继续做分发与投递。
-    pub(crate) fn take_expired(
+    pub(crate) fn take_ready(
         &mut self,
-        timeout_ms: u64,
+        policy: CoalescePolicy,
         is_busy: impl Fn(CtxKey) -> bool,
     ) -> Vec<(CtxKey, TakenBatch)> {
-        let expired: Vec<CtxKey> = self
-            .batches
-            .iter()
-            .filter(|(_, batch)| batch.last_update.elapsed().as_millis() >= timeout_ms as u128)
-            .map(|(&key, _)| key)
-            .filter(|key| !is_busy(*key))
+        let now = Instant::now();
+        let ready: HashSet<StreamKey> = self
+            .stream_summaries(&is_busy)
+            .into_iter()
+            .filter(|(_, snapshot)| snapshot.is_ready(now, policy))
+            .map(|(stream, _)| stream)
             .collect();
 
-        expired
+        self.batches
+            .keys()
+            .copied()
+            .filter(|key| !is_busy(*key) && ready.contains(&StreamKey::of(*key)))
+            .collect::<Vec<_>>()
             .into_iter()
             .filter_map(|key| self.take(key).map(|taken| (key, taken)))
             .collect()
@@ -125,6 +209,54 @@ impl BatchBuffer {
     /// 丢弃某个用户的全部未处理批次
     pub(crate) fn forget_user(&mut self, user_id: u64) {
         self.batches.retain(|&(_, uid), _| uid != user_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn snapshot(oldest_ms: u64, newest_ms: u64, urgent: bool) -> (StreamSnapshot, Instant) {
+        let now = Instant::now();
+        (
+            StreamSnapshot {
+                oldest: now - Duration::from_millis(oldest_ms),
+                newest: now - Duration::from_millis(newest_ms),
+                urgent,
+            },
+            now,
+        )
+    }
+
+    const POLICY: CoalescePolicy = CoalescePolicy {
+        quiet_ms: 3500,
+        max_wait_ms: 15000,
+    };
+
+    #[test]
+    fn a_stream_still_talking_is_not_done() {
+        let (s, now) = snapshot(4000, 500, false);
+        assert!(!s.is_ready(now, POLICY), "安静才 0.5s，这段话还没说完");
+    }
+
+    #[test]
+    fn a_quiet_gap_hands_over_the_whole_batch() {
+        let (s, now) = snapshot(4000, 3600, false);
+        assert!(s.is_ready(now, POLICY), "已经安静 3.6s，该看了");
+    }
+
+    #[test]
+    fn a_stream_that_never_goes_quiet_still_gets_read() {
+        // 最老的已经等了 15s，但最新一条刚刚才到：靠静默永远不触发，硬上限兜底
+        let (s, now) = snapshot(15100, 100, false);
+        assert!(s.is_ready(now, POLICY), "最老一条等了 15s，不能再拖");
+    }
+
+    #[test]
+    fn being_called_skips_the_coalescing_window() {
+        let (s, now) = snapshot(100, 100, true);
+        assert!(s.is_ready(now, POLICY), "被叫到就立刻交出去");
     }
 }
 
