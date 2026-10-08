@@ -233,8 +233,13 @@ pub(crate) fn process_message(user_id: u64, message: &str) {
     // ── 感知入流 + 夜间门控：夜间是睡眠，不是免打扰（危机除外） ──
     let crisis_level = crate::emotion::get_state(user_id).crisis_level;
     let asleep = crate::mind::is_night() && !crisis_level.is_crisis();
+    // QQ 号是私聊身份的唯一锚点；昵称只负责可读性。这里进入 mind 后仍保留 QQ，
+    // 避免昵称变化或同名用户造成长期经历串线。
+    let display_name = crate::person_info::get_display_name(user_id, 0)
+        .unwrap_or_else(|| "有人".into());
+    let speaker = format!("[QQ:{}|{}]", user_id, display_name);
     let mut perception = crate::mind::transcribe_message(
-        &crate::person_info::get_display_name(user_id, 0).unwrap_or_else(|| "有人".into()),
+        &speaker,
         crate::util::now_secs(),
         &ai_message,
         false,
@@ -596,9 +601,12 @@ fn speak_and_deliver_group(
     // ── 感知入流（含夜间标记）+ 夜间门控：她真的睡了 ──
     let asleep = crate::mind::is_night() && !crisis;
     for u in utterances {
+        // 这里是进入长期 mind stream 的最后一道身份包装：必须带 QQ，不能只带昵称。
+        let display_name = crate::person_info::get_display_name(u.user_id, group_id)
+            .unwrap_or_else(|| "群友".into());
+        let speaker = format!("[QQ:{}|{}]", u.user_id, display_name);
         let mut perception = crate::mind::transcribe_message(
-            &crate::person_info::get_display_name(u.user_id, group_id)
-                .unwrap_or_else(|| "群友".into()),
+            &speaker,
             u.ts,
             &u.text,
             false,
