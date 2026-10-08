@@ -139,13 +139,16 @@ pub(crate) fn catch_up(group_id: u64) -> String {
     let lines: Vec<String> = entries
         .iter()
         .map(|e| {
-            let name = if config::get().self_qq > 0 && e.user_id == config::get().self_qq {
+            // QQ 号是长期身份锚点；昵称只用于阅读。深读内容也必须保留 QQ，
+            // 否则进入 mind/experience 后会退化成“只记得昵称”，同名或改名时会串人。
+            let display_name = if config::get().self_qq > 0 && e.user_id == config::get().self_qq {
                 "你自己".to_string()
             } else {
                 crate::person_info::get_display_name(e.user_id, group_id)
                     .unwrap_or_else(|| "群友".to_string())
             };
-            crate::mind::sensation::transcribe_message(&name, e.timestamp, &e.content, false)
+            let speaker = format!("[QQ:{}|{}]", e.user_id, display_name);
+            crate::mind::sensation::transcribe_message(&speaker, e.timestamp, &e.content, false)
         })
         .collect();
     info!(group_id, count = lines.len(), "foraging: 深读完成");
