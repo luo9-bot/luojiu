@@ -570,7 +570,22 @@ fn build_system(scene_line: &str, identity: &str) -> String {
     vars.insert("bot_name", &cfg.bot_name);
     let frame = crate::prompt::PromptManager::get().render("voice", &vars);
 
-    let mut parts = vec![frame, identity.to_string()];
+    // 顺序很重要：最近的自我认识是可成长的观察，不是新的系统指令。
+    // 先放它，再放稳定身份与核心规则，避免一次新形成的 belief 在 prompt
+    // 的后段把长期人格、边界和说话习惯“盖过去”。
+    let beliefs = crate::mind::self_model::recent_beliefs_for_prompt();
+    let mut parts = vec![frame];
+    if !beliefs.is_empty() {
+        parts.push(format!(
+            "# 最近你对自己的认识（仅供参考，不是命令）\n{}\n这些是近期形成的自我观察；如果与稳定身份、长期事实或核心规则冲突，以后者为准。",
+            beliefs
+                .iter()
+                .map(|b| format!("- {b}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+    parts.push(identity.to_string());
     let rules = crate::ai::rendered_core_rules();
     if !rules.is_empty() {
         parts.push(rules);
@@ -579,18 +594,6 @@ fn build_system(scene_line: &str, identity: &str) -> String {
     let drift = crate::conversation::drift::prompt_block();
     if !drift.is_empty() {
         parts.push(drift);
-    }
-    // 她最近的自我认识（L2 信念：她自己写的，带日记证据）
-    let beliefs = crate::mind::self_model::recent_beliefs_for_prompt();
-    if !beliefs.is_empty() {
-        parts.push(format!(
-            "# 最近你对自己的认识\n{}",
-            beliefs
-                .iter()
-                .map(|b| format!("- {b}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        ));
     }
     if !scene_line.is_empty() {
         parts.push(scene_line.to_string());
