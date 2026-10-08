@@ -185,7 +185,8 @@ fn defaults() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
         tpl!(
             "voice",
             "../../defaults/voice.prompt",
-            PREV_VOICE_BEFORE_SPEAK_GATE
+            PREV_VOICE_BEFORE_SPEAK_GATE,
+            PREV_VOICE_BEFORE_BATCH_DECISION
         ),
         tpl!(
             "task_progress",
@@ -210,6 +211,10 @@ fn defaults() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
             "../../defaults/history_attention.prompt"
         ),
         tpl!(
+            "attention_drift",
+            "../../defaults/attention_drift.prompt"
+        ),
+        tpl!(
             "reply_effect_judge",
             "../../defaults/reply_effect_judge.prompt"
         ),
@@ -226,6 +231,10 @@ const PREV_VOICE_BEFORE_SPEAK_GATE: &str =
 /// 上一版内置 `task_progress.prompt`（自我强化环修复之前）
 const PREV_TASK_PROGRESS_BEFORE_SELF_LOOP_FIX: &str =
     include_str!("../../defaults/legacy/task_progress.pre-self-loop-fix.prompt");
+
+/// 上一版内置 `voice.prompt`（"一批消息是一段话"之前）
+const PREV_VOICE_BEFORE_BATCH_DECISION: &str =
+    include_str!("../../defaults/legacy/voice.pre-batch-decision.prompt");
 
 #[cfg(test)]
 mod tests {

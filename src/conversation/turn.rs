@@ -143,6 +143,16 @@ fn names_bot(text: &str, bot_name: &str) -> bool {
     !bot_name.is_empty() && text.contains(bot_name)
 }
 
+/// 这条**原始 CQ 文本**是不是在叫她（@ 她本人或点了她的名字）
+///
+/// 给批次聚合用的"点名即到"：被叫到的人会立刻抬头，
+/// 不会把整段闲聊听完再说。
+pub(crate) fn addresses_bot(raw: &str, self_qq: u64, bot_name: &str) -> bool {
+    let targets = at_targets(raw);
+    (self_qq > 0 && targets.contains(&self_qq))
+        || (targets.is_empty() && names_bot(&strip_cq_codes(raw), bot_name))
+}
+
 /// 判定一批消息的焦点
 ///
 /// `is_follow_up(user_id)` 由调用方提供（通常是"她 N 秒内回过这个人"），

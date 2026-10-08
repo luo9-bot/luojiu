@@ -106,8 +106,14 @@ impl Default for AiConfig {
 pub(crate) struct ConversationConfig {
     #[serde(default = "default_max_history")]
     pub max_history: usize,
+    /// 聚合静默窗口 (毫秒)：一个对话流安静这么久，就算"这段话说完了"，
+    /// 整批一起交给她看一次，而不是每条消息各回一句
     #[serde(default = "default_batch_timeout")]
     pub batch_timeout_ms: u64,
+    /// 聚合硬上限 (毫秒)：最老的一条等了这么久，哪怕还在刷屏也要先看一眼，
+    /// 否则热闹的群里她会被一直拖着不开口
+    #[serde(default = "default_batch_max_wait")]
+    pub batch_max_wait_ms: u64,
     #[serde(default = "default_max_typing_delay")]
     pub max_typing_delay_ms: u64,
     #[serde(default = "default_reply_follow_up_secs")]
@@ -136,6 +142,7 @@ impl Default for ConversationConfig {
         Self {
             max_history: default_max_history(),
             batch_timeout_ms: default_batch_timeout(),
+            batch_max_wait_ms: default_batch_max_wait(),
             max_typing_delay_ms: default_max_typing_delay(),
             reply_follow_up_secs: default_reply_follow_up_secs(),
             action_descriptions: default_action_descriptions(),
@@ -526,6 +533,44 @@ impl Default for QuotaConfig {
 
 // ── 人类化行为配置 ──────────────────────────────────────────────
 
+/// 注意力漂移：发散到什么程度、要不要回到正题、短反应怎么开头
+///
+/// 三个字段都是**档位名**，合法值见 `defaults/attention_drift.prompt`；
+/// 写错了不会报错，会回落到默认档位（prompt 缺失应当表现为"这一层
+/// 没有内容"，不该让整条回复路径消失）。
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub(crate) struct AttentionDriftConfig {
+    /// 漂移档位：subtle / active / scattered / wild
+    #[serde(default = "default_drift_level")]
+    pub drift_level: String,
+    /// 回钩策略：strict / balanced / loose
+    #[serde(default = "default_anchor_policy")]
+    pub anchor_policy: String,
+    /// 短反应风格：reserved / natural / lively
+    #[serde(default = "default_reaction_style")]
+    pub reaction_style: String,
+}
+
+impl Default for AttentionDriftConfig {
+    fn default() -> Self {
+        Self {
+            drift_level: default_drift_level(),
+            anchor_policy: default_anchor_policy(),
+            reaction_style: default_reaction_style(),
+        }
+    }
+}
+
+fn default_drift_level() -> String {
+    "active".into()
+}
+fn default_anchor_policy() -> String {
+    "balanced".into()
+}
+fn default_reaction_style() -> String {
+    "natural".into()
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct HumanityConfig {
     // 社交电量
@@ -559,6 +604,12 @@ pub(crate) struct HumanityConfig {
     // 注意力
     #[serde(default = "default_true")]
     pub attention_enabled: bool,
+
+    // 注意力漂移：人会被新鲜、好笑、反差强或熟悉的东西勾走
+    #[serde(default = "default_true")]
+    pub attention_drift_enabled: bool,
+    #[serde(default)]
+    pub attention_drift: AttentionDriftConfig,
 
     // 变速回复
     #[serde(default = "default_true")]
@@ -618,6 +669,8 @@ impl Default for HumanityConfig {
             cognitive_biases_enabled: true,
             cognitive_biases: CognitiveBiasesConfig::default(),
             attention_enabled: true,
+            attention_drift_enabled: true,
+            attention_drift: AttentionDriftConfig::default(),
             response_timing_enabled: true,
             base_typing_speed: default_base_typing_speed(),
             unpredictability_enabled: true,
@@ -693,7 +746,10 @@ fn default_max_history() -> usize {
     10
 }
 fn default_batch_timeout() -> u64 {
-    2000
+    3500
+}
+fn default_batch_max_wait() -> u64 {
+    15000
 }
 fn default_max_typing_delay() -> u64 {
     4000

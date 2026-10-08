@@ -575,6 +575,11 @@ fn build_system(scene_line: &str, identity: &str) -> String {
     if !rules.is_empty() {
         parts.push(rules);
     }
+    // 注意力漂移：她会被什么勾走（未开启时为空）
+    let drift = crate::conversation::drift::prompt_block();
+    if !drift.is_empty() {
+        parts.push(drift);
+    }
     // 她最近的自我认识（L2 信念：她自己写的，带日记证据）
     let beliefs = crate::mind::self_model::recent_beliefs_for_prompt();
     if !beliefs.is_empty() {
@@ -791,6 +796,11 @@ pub(crate) fn speak_group(
     }
     // 风格神经元：从她自己的回复记录学来的统计先验（有训练产物时才出现）
     if let Some(block) = style_block(group_id, &new_perceptions, primary) {
+        user_content.push_str("\n\n");
+        user_content.push_str(&block);
+    }
+    // 这个群的黑话/梗与说话路子：学过的东西得能想起来
+    if let Some(block) = crate::learner::context_block(group_id, &new_perceptions) {
         user_content.push_str("\n\n");
         user_content.push_str(&block);
     }

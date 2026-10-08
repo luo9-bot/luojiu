@@ -10,6 +10,13 @@ Rust 编写的 QQ 聊天机器人插件，具备 AI 对话、记忆系统、向�
 - 注释行会被直接跳过，不进缩进栈也不进 `handled_keys`
 - 嵌套字段若被注释，尾部追加逻辑只处理顶级 key，嵌套值会**静默丢失**
 - **任何 `src/config/structs.rs` 中 `*Config` 结构体的字段变更，都必须同步更新 `config.example.yaml` 中对应行（确保非注释形式）**
+- 嵌套块（如 `humanity.attention_drift:`）同样必须以非注释形式存在，否则整个块会被静默丢弃
+
+### 内置 prompt 升级要写进历史版本表
+
+`src/prompt/manager.rs` 的 `defaults()` 是 `(名字, 当前内容, 历史版本列表)`。
+修改 `defaults/*.prompt` 时必须把被替换掉的旧文本存到 `defaults/legacy/` 并追加进历史列表，
+否则已部署实例会把旧内置文本当成"用户自定义"、永远不升级。
 
 ### 阻塞主循环是第二大主题
 

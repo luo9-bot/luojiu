@@ -2,6 +2,7 @@
 
 pub(crate) mod attention;
 pub(crate) mod batch;
+pub(crate) mod drift;
 pub(crate) mod handler;
 pub(crate) mod interruption;
 pub(crate) mod perception;
@@ -30,6 +31,15 @@ fn enforce_zero_tolerance(user_id: u64, action: &crate::anti_injection::Action, 
         &issues.join(";"),
     );
     warn!(user_id, ?action, "高风险消息已拦截，未自动加入永久黑名单");
+}
+
+/// 这条消息是不是在点名找她
+///
+/// 被点名的那条不等聚合窗口：人被叫到会立刻抬头，
+/// 不会把整段闲聊听完再说。
+fn addresses_bot(msg: &str) -> bool {
+    let cfg = config::get();
+    turn::addresses_bot(msg, cfg.self_qq, &cfg.bot_name)
 }
 
 pub(crate) fn handle_group_msg(
@@ -237,7 +247,8 @@ pub(crate) fn handle_group_msg(
     }
 
     // ── 所有消息加入批次，由 AI 决策是否回复 ──
-    batches(|b| b.append(group_id, user_id, trimmed, entry_id));
+    let urgent = addresses_bot(trimmed);
+    batches(|b| b.append(group_id, user_id, trimmed, entry_id, urgent));
 }
 
 pub(crate) fn handle_private_msg(
@@ -375,7 +386,9 @@ pub(crate) fn handle_private_msg(
             });
         }
 
-        batches(|b| b.append(0, user_id, trimmed, 0));
+        // 私聊不设"点名"：每句话都是对她说的，但仍然要凑成一批再看，
+        // 否则对方连着打的三句会被拆成三轮、各回一句
+        batches(|b| b.append(0, user_id, trimmed, 0, false));
     }
 }
 

@@ -121,11 +121,27 @@ observe 纯内存更新（主循环零 IO），周期 tick（60s）统一衰减�
 | 模块 | 功能 |
 |------|------|
 | `conversation/handler.rs` | 私聊语音路径 + 群聊调度、回复落地簿记 |
-| `conversation/batch.rs` | 批次累积与过期分发 |
+| `conversation/batch.rs` | **突发聚合**：把一段时间的话凑成一批，一次交给她看 |
 | `conversation/context.rs` | 场景上下文：状态以第一人称体验注入 |
 | `conversation/attention.rs` | 注意力机制 |
+| `conversation/drift.rs` | **注意力漂移**：发散—回钩—短反应三层档位 |
 | `voice/mod.rs` | **语音合一**：单次 LLM 调用同时完成感知、决策（说话/沉默/表情包）和表达 |
 | `ai/tool_loop.rs` | 多轮工具循环：纯文本响应即发言，空响应即沉默 |
+
+#### 突发聚合（`state::BatchBuffer` + `conversation/batch.rs`）
+
+聚合的粒度是**对话流**（同一个群 / 同一个人的私聊），不是 (群, 用户)：
+
+| 机制 | 说明 |
+|------|------|
+| 静默窗口 `batch_timeout_ms`（默认 3500ms） | 这个流安静这么久就算"这段话说完了"，整批一起交出去 |
+| 硬上限 `batch_max_wait_ms`（默认 15000ms） | 最老的一条等了这么久，哪怕还在刷屏也先看一眼 |
+| 点名即到 | @ 她或叫她名字的那条不等窗口，立刻交出去 |
+| 时间序 | 批内按真实到达时刻（毫秒）排序后再递给她 |
+
+为什么：早先批次按 (群, 用户) 各自 `batch_timeout_ms` 到期，同一个人隔 3 秒说的三句话
+会被切成三个轮次、各回一句——"一句一句地回"就是这么来的。现在一段话凑成一批、
+一次调用，`voice.prompt` 明确要求她在**一次决策**里挑要接哪几条。
 
 ### 7. 对话结束检测 (`conversation_end/`)
 
@@ -157,9 +173,9 @@ observe 纯内存更新（主循环零 IO），周期 tick（60s）统一衰减�
 
 | 模块 | 功能 |
 |------|------|
-| `store.rs` | 表达习惯存储 (ExpressionHabit) |
-| `extract.rs` | 从对话中提取表达习惯 |
-| `mod.rs` | LLM 子代理选择最合适的表达（候选 ≥ 10 时激活） |
+| `store.rs` | 表达习惯 / 黑话梗存储 (ExpressionHabit, JargonEntry) |
+| `extract.rs` | 从对话中提取表达习惯与黑话/梗（含含义推断） |
+| `mod.rs` | **读取侧**：把眼前命中的梗与常用说话路子递回 prompt |
 
 ---
 

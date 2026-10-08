@@ -102,11 +102,18 @@ conversation:
   # 建议 5 ~ 15
   max_history: 10
 
-  # 消息合并超时 (毫秒)
-  # 用户在短时间内发送的连续消息会合并为一条发给 AI
-  # 避免用户分段发送时触发多次 API 调用
-  # 建议 4000 ~ 8000
-  batch_timeout_ms: 2000
+  # 聚合静默窗口 (毫秒)
+  # 一个对话流（同一个群 / 同一个人的私聊）安静这么久，就算"这段话说完了"，
+  # 这段时间里的所有消息凑成一批、一次交给 AI，由它自己决定接哪几条
+  # 避免对方分段说话时被拆成好几轮、一句一句地回
+  # 建议 3000 ~ 6000
+  batch_timeout_ms: 3500
+
+  # 聚合硬上限 (毫秒)
+  # 最老的那条消息已经等了这么久，哪怕群里还在刷屏也先看一眼，
+  # 否则聊得越热闹她越插不上话
+  # 建议 10000 ~ 20000
+  batch_max_wait_ms: 15000
 
   # 打字模拟速度 (字符/秒)
   # AI 回复按 |^| 分割为多条消息，每条之间根据长度计算延迟
@@ -234,6 +241,14 @@ humanity:
 
   # 注意力模型：影响回复深度和风格
   attention_enabled: true
+
+  # 注意力漂移：人不会一直紧盯着正题，会被新鲜、好笑、反差强或熟悉的东西勾走一下
+  # 漂移必须能从最近消息里找到触发点，不是乱换话题
+  attention_drift_enabled: true
+  attention_drift:
+    drift_level: active        # 漂移档位：subtle 轻微 / active 活跃 / scattered 发散 / wild 跳跃
+    anchor_policy: balanced    # 回钩策略：strict 严格 / balanced 自然 / loose 宽松
+    reaction_style: natural    # 短反应风格：reserved 克制 / natural 自然 / lively 活泼
 
   # 变速回复：动态打字延迟（拟人节奏，不做内容手术）
   response_timing_enabled: true
