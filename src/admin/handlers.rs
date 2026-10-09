@@ -974,12 +974,13 @@ pub(crate) fn handle_config(
                     .collect();
                 let reauth_required = config_path_value(&before, "admin.token")
                     != config_path_value(&after, "admin.token");
+                let requires_restart = !restart_required.is_empty();
                 return ok(serde_json::json!({
                     "ok": true,
                     "applied": true,
                     "restart_required": restart_required,
                     "reauth_required": reauth_required,
-                    "message": if restart_required.is_empty() {
+                    "message": if !requires_restart {
                         "配置文件已重新载入并应用".to_string()
                     } else {
                         "配置文件已载入；部分设置仍需重启或通过专用管理页面操作".to_string()
