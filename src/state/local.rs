@@ -222,54 +222,6 @@ impl BatchBuffer {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::time::Duration;
-
-    fn snapshot(oldest_ms: u64, newest_ms: u64, urgent: bool) -> (StreamSnapshot, Instant) {
-        let now = Instant::now();
-        (
-            StreamSnapshot {
-                oldest: now - Duration::from_millis(oldest_ms),
-                newest: now - Duration::from_millis(newest_ms),
-                urgent,
-            },
-            now,
-        )
-    }
-
-    const POLICY: CoalescePolicy = CoalescePolicy {
-        quiet_ms: 3500,
-        max_wait_ms: 15000,
-    };
-
-    #[test]
-    fn a_stream_still_talking_is_not_done() {
-        let (s, now) = snapshot(4000, 500, false);
-        assert!(!s.is_ready(now, POLICY), "安静才 0.5s，这段话还没说完");
-    }
-
-    #[test]
-    fn a_quiet_gap_hands_over_the_whole_batch() {
-        let (s, now) = snapshot(4000, 3600, false);
-        assert!(s.is_ready(now, POLICY), "已经安静 3.6s，该看了");
-    }
-
-    #[test]
-    fn a_stream_that_never_goes_quiet_still_gets_read() {
-        // 最老的已经等了 15s，但最新一条刚刚才到：靠静默永远不触发，硬上限兜底
-        let (s, now) = snapshot(15100, 100, false);
-        assert!(s.is_ready(now, POLICY), "最老一条等了 15s，不能再拖");
-    }
-
-    #[test]
-    fn being_called_skips_the_coalescing_window() {
-        let (s, now) = snapshot(100, 100, true);
-        assert!(s.is_ready(now, POLICY), "被叫到就立刻交出去");
-    }
-}
-
 // ── 门禁状态：进程级，任何线程都可读写 ────────────────────────
 
 /// "谁在对话、谁被拉黑"
@@ -366,5 +318,53 @@ impl GateState {
 
     pub(crate) fn blacklisted(&self) -> impl Iterator<Item = u64> + '_ {
         self.blacklist.iter().copied()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn snapshot(oldest_ms: u64, newest_ms: u64, urgent: bool) -> (StreamSnapshot, Instant) {
+        let now = Instant::now();
+        (
+            StreamSnapshot {
+                oldest: now - Duration::from_millis(oldest_ms),
+                newest: now - Duration::from_millis(newest_ms),
+                urgent,
+            },
+            now,
+        )
+    }
+
+    const POLICY: CoalescePolicy = CoalescePolicy {
+        quiet_ms: 3500,
+        max_wait_ms: 15000,
+    };
+
+    #[test]
+    fn a_stream_still_talking_is_not_done() {
+        let (s, now) = snapshot(4000, 500, false);
+        assert!(!s.is_ready(now, POLICY), "安静才 0.5s，这段话还没说完");
+    }
+
+    #[test]
+    fn a_quiet_gap_hands_over_the_whole_batch() {
+        let (s, now) = snapshot(4000, 3600, false);
+        assert!(s.is_ready(now, POLICY), "已经安静 3.6s，该看了");
+    }
+
+    #[test]
+    fn a_stream_that_never_goes_quiet_still_gets_read() {
+        // 最老的已经等了 15s，但最新一条刚刚才到：靠静默永远不触发，硬上限兜底
+        let (s, now) = snapshot(15100, 100, false);
+        assert!(s.is_ready(now, POLICY), "最老一条等了 15s，不能再拖");
+    }
+
+    #[test]
+    fn being_called_skips_the_coalescing_window() {
+        let (s, now) = snapshot(100, 100, true);
+        assert!(s.is_ready(now, POLICY), "被叫到就立刻交出去");
     }
 }
