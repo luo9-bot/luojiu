@@ -224,6 +224,7 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
             match worker {
                 Ok(_) => Some(tx),
                 Err(error) => {
+                    set_worker_status("error");
                     warn!(%error, "growth_lab: cannot start observer worker");
                     None
                 }
@@ -276,7 +277,12 @@ pub(crate) fn observe_speak_gate(
                     .dropped_events_since_start += 1;
             }
             TrySendError::Disconnected(_) => {
-                // The worker already logs its startup failure; avoid per-message log spam.
+                // The worker has stopped unexpectedly. Surface the loss without log spam.
+                let mut summary = summary_lock()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                summary.status = "error".to_string();
+                summary.write_errors_since_start += 1;
             }
         }
     }
