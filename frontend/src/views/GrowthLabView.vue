@@ -13,9 +13,11 @@
     <div v-else-if="!report" class="empty">正在读取观测数据…</div>
     <template v-else>
       <div class="status-line">
-        <span class="status-dot" :class="{ live: report.available }"></span>
-        <strong>{{ report.available ? '观测器数据可用' : '等待第一条观测' }}</strong>
+        <span class="status-dot" :class="{ live: report.status === 'ready', failed: report.status === 'error' }"></span>
+        <strong>{{ report.status === 'error' ? '观测器异常' : report.status === 'ready' ? (report.available ? '观测器运行中 · 已有数据' : '观测器运行中 · 等待第一条事件') : '观测器启动中' }}</strong>
         <span class="muted">每 15 秒自动刷新</span>
+        <span v-if="report.dropped_events_since_start" class="health-warning">本次运行丢弃 {{ number(report.dropped_events_since_start) }} 条观测</span>
+        <span v-if="report.write_errors_since_start" class="health-warning">写入错误 {{ number(report.write_errors_since_start) }} 次</span>
         <span class="muted stamp" v-if="lastUpdated">最近刷新 {{ lastUpdated }}</span>
       </div>
 
@@ -119,6 +121,7 @@ function time(v) {
 }
 
 async function load() {
+  if (loading.value) return
   loading.value = true
   try {
     report.value = await api('/api/growth-lab')
@@ -152,6 +155,8 @@ onUnmounted(() => {
 .status-line { justify-content:flex-start; flex-wrap:wrap; padding:10px 12px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface); font-size:12px; }
 .status-dot,.scope-mark { width:7px; height:7px; border-radius:50%; background:var(--text-3); flex-shrink:0; }
 .status-dot.live,.scope-mark { background:var(--success); }
+.status-dot.failed { background:var(--danger); }
+.health-warning { color:var(--danger); font-size:11px; font-weight:600; }
 .stamp { margin-left:auto; }
 .metric-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
 .metric { display:flex; flex-direction:column; gap:8px; padding:18px; }
