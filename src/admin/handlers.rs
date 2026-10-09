@@ -996,12 +996,16 @@ pub(crate) fn handle_config(
     if *method == Method::Get && segs.first() == Some(&"status") {
         let error = config::error_message();
         let runtime = serde_json::to_value(config::get()).ok();
+        // Deserialize through Config first so omitted YAML defaults compare equal to
+        // the runtime snapshot. Parsing raw YAML directly as JSON creates false drift.
         let disk = std::fs::read_to_string(config::data_dir().join("config.yaml"))
             .ok()
-            .and_then(|content| serde_yaml::from_str::<serde_json::Value>(&content).ok());
+            .and_then(|content| serde_yaml::from_str::<config::Config>(&content).ok())
+            .and_then(|saved| serde_json::to_value(saved).ok());
+        // Missing or invalid disk config is not "in sync"; make the discrepancy visible.
         let pending_file_changes = match (&runtime, &disk) {
             (Some(active), Some(saved)) => active != saved,
-            _ => false,
+            _ => true,
         };
         return ok(serde_json::json!({
             "ok": error.is_empty(),
@@ -1066,16 +1070,26 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 Ok(content) => content,
                 Err(error) => return err(500, &format!("读取现有配置失败（未写入）: {error}")),
             };
-            let existing_cfg: serde_json::Value = match serde_yaml::from_str(&existing) {
+            let existing_cfg: config::Config = match serde_yaml::from_str(&existing) {
                 Ok(value) => value,
                 Err(error) => {
                     return err(409, &format!("磁盘配置无法解析，拒绝覆盖以免丢失配置：{error}"));
                 }
             };
+            let existing_cfg = match serde_json::to_value(existing_cfg) {
+                Ok(value) => value,
+                Err(error) => return err(500, &format!("规范化磁盘配置失败（未写入）：{error}")),
+            };
+
+            // UI reads the active runtime snapshot. If the file was edited externally
+            // since then, refuse a partial save rather than silently applying unrelated
+            // disk changes or overwriting them with stale UI values.
+            let active_cfg = serde_json::to_value(config::get()).unwrap_or_default();
+            if active_cfg != existing_cfg {
+                return err(409, "磁盘配置与运行时配置不一致；请先刷新状态，并选择“从文件重新载入”或恢复磁盘配置后再保存。");
+            }
 
             // 深合并：新配置中未发送的嵌套字段保留原值。
-            // 同时捕获当前运行时快照，以便识别之前已写入磁盘、但尚未重启生效的设置。
-            let active_cfg = serde_json::to_value(config::get()).unwrap_or_default();
             let mut merged = deep_merge(&existing_cfg, &new_cfg);
 
             // 遮罩字段还原覆盖全部嵌套配置，未修改的密钥不会被写成遮罩字符串。
