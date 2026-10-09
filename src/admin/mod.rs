@@ -182,6 +182,7 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
         }
         Some(&"schedule") => handlers::handle_schedule(&method),
         Some(&"analytics") => handlers::handle_analytics(),
+        Some(&"growth-lab") => handlers::handle_growth_lab(&method),
         Some(&"turn-shadow") => handlers::handle_turn_shadow(),
         Some(&"audit") => handlers::handle_audit(),
         Some(&"anti-injection") => handlers::handle_anti_injection(&method, &api_segs[1..]),
