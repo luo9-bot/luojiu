@@ -236,6 +236,9 @@ const sections = [
       { key: 'humanity.speak_gate', label: '开口门限(越低越爱插话)', type: 'number' },
       { key: 'humanity.cognitive_biases_enabled', label: '认知偏差', type: 'bool' },
       { key: 'humanity.cognitive_biases.confirmation_bias', label: '确认偏误', type: 'number' },
+      { key: 'humanity.cognitive_biases.mood_congruence', label: '情绪一致性偏差', type: 'number' },
+      { key: 'humanity.cognitive_biases.anchoring_strength', label: '锚定效应强度', type: 'number' },
+      { key: 'humanity.cognitive_biases.availability_heuristic', label: '可得性启发', type: 'number' },
       { key: 'humanity.attention_enabled', label: '注意力模型', type: 'bool' },
       { key: 'humanity.attention_drift_enabled', label: '注意力漂移', type: 'bool' },
       { key: 'humanity.attention_drift.drift_level', label: '漂移档位', type: 'text' },
@@ -321,6 +324,7 @@ function openEdit() {
 }
 
 async function load() {
+  configError.value = ''
   try { config.value = await api('/api/config') } catch (e) { configError.value = e.message }
   try {
     const s = await api('/api/config/status')
