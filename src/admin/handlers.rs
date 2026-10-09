@@ -976,22 +976,8 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 Ok(v) => v,
                 Err(e) => return err(500, &format!("serialize runtime config: {e}")),
             };
-            // 脱敏：隐藏 api_key
-            if let Some(obj) = cfg.as_object_mut() {
-                if let Some(key) = obj.get_mut("api_key")
-                    && let Some(s) = key.as_str()
-                    && s.len() > 8
-                {
-                    *key = serde_json::json!(format!("{}...{}", &s[..4], &s[s.len() - 4..]));
-                }
-                if let Some(v) = obj.get_mut("vision").and_then(|v| v.as_object_mut())
-                    && let Some(key) = v.get_mut("api_key")
-                    && let Some(s) = key.as_str()
-                    && s.len() > 8
-                {
-                    *key = serde_json::json!(format!("{}...{}", &s[..4], &s[s.len() - 4..]));
-                }
-            }
+            // 所有敏感配置使用统一遮罩；绝不把 search/embedding/admin 密钥直接返回前端。
+            redact_config_secrets(&mut cfg);
             ok(cfg)
         }
         Method::Put => {
@@ -1007,28 +993,8 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             // 深合并：新配置中未发送的嵌套字段保留原值
             let mut merged = deep_merge(&existing_cfg, &new_cfg);
 
-            // 脱敏字段还原：包含 "..." 的 api_key 保留原值
-            if let (Some(new_obj), Some(old_obj)) =
-                (merged.as_object_mut(), existing_cfg.as_object())
-            {
-                // api_key
-                if let Some(key) = new_obj.get("api_key").and_then(|v| v.as_str())
-                    && key.contains("...")
-                    && let Some(old_key) = old_obj.get("api_key")
-                {
-                    new_obj.insert("api_key".to_string(), old_key.clone());
-                }
-                // vision.api_key
-                if let (Some(new_vis), Some(old_vis)) = (
-                    new_obj.get_mut("vision").and_then(|v| v.as_object_mut()),
-                    old_obj.get("vision").and_then(|v| v.as_object()),
-                ) && let Some(key) = new_vis.get("api_key").and_then(|v| v.as_str())
-                    && key.contains("...")
-                    && let Some(old_key) = old_vis.get("api_key")
-                {
-                    new_vis.insert("api_key".to_string(), old_key.clone());
-                }
-            }
+            // 遮罩字段还原覆盖全部嵌套配置，未修改的密钥不会被写成遮罩字符串。
+            restore_config_secrets(&mut merged, &existing_cfg);
 
             // 类型化保存：反序列化成 Config 再原子落盘。
             // 同时在写入前检查人设文件，避免保存后热重载失败。
@@ -1369,6 +1335,60 @@ pub(crate) fn handle_memory_ops_log(
 /// - 对于其他情况：新值覆盖旧值
 ///
 /// 这样前端发送部分嵌套字段时，不会丢失未发送的字段
+const SECRET_MASK: &str = "••••••••";
+
+fn redact_config_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                if (key == "api_key" || key == "token")
+                    && child.as_str().is_some_and(|secret| !secret.is_empty())
+                {
+                    *child = serde_json::Value::String(SECRET_MASK.to_string());
+                } else {
+                    redact_config_secrets(child);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_config_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn restore_config_secrets(new_value: &mut serde_json::Value, old_value: &serde_json::Value) {
+    match new_value {
+        serde_json::Value::Object(new_object) => {
+            for (key, child) in new_object.iter_mut() {
+                let old_child = old_value.get(key);
+                let is_mask = child.as_str().is_some_and(|value| {
+                    value == SECRET_MASK || value.contains("...")
+                });
+                if (key == "api_key" || key == "token") && is_mask {
+                    if let Some(old_secret) = old_child {
+                        *child = old_secret.clone();
+                    }
+                } else if let Some(old_child) = old_child {
+                    restore_config_secrets(child, old_child);
+                }
+            }
+        }
+        serde_json::Value::Array(new_items) => {
+            if let Some(old_items) = old_value.as_array() {
+                for (index, item) in new_items.iter_mut().enumerate() {
+                    if let Some(old_item) = old_items.get(index) {
+                        restore_config_secrets(item, old_item);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Resolve a dotted path in a JSON value; used to report settings that require restart.
 fn config_path_value<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
     path.split('.').try_fold(value, |current, segment| current.get(segment))
