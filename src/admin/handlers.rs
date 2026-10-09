@@ -7,21 +7,46 @@ use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
 static PENDING_RESTART: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+static STARTUP_CONFIG: OnceLock<serde_json::Value> = OnceLock::new();
 
-fn record_restart_required(items: &[serde_json::Value]) {
+const RESTART_FIELDS: [(&str, &str); 7] = [
+    ("admin.port", "管理 WebUI 端口在启动时绑定"),
+    ("log.enabled", "日志输出管线在启动时创建"),
+    ("log.level", "日志过滤器在启动时创建"),
+    ("self_qq", "机器人身份自检在启动时执行"),
+    ("auto_start_users", "自动启动私聊名单在启动时应用"),
+    ("auto_start_groups", "自动启动群聊名单在启动时应用"),
+    ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
+];
+
+pub(crate) fn initialize_config_baseline() {
+    let _ = STARTUP_CONFIG.set(serde_json::to_value(config::get()).unwrap_or_default());
+}
+
+fn sync_pending_restart(active: &serde_json::Value) -> Vec<serde_json::Value> {
+    let baseline = STARTUP_CONFIG
+        .get_or_init(|| serde_json::to_value(config::get()).unwrap_or_default());
+    let required: Vec<serde_json::Value> = RESTART_FIELDS
+        .iter()
+        .filter(|(path, _)| config_path_value(baseline, path) != config_path_value(active, path))
+        .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+        .collect();
+
     let pending = PENDING_RESTART.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let Ok(mut pending) = pending.lock() else {
-        warn!("config: could not record restart-required fields");
-        return;
-    };
-    for item in items {
-        if let (Some(field), Some(reason)) = (
-            item.get("field").and_then(|v| v.as_str()),
-            item.get("reason").and_then(|v| v.as_str()),
-        ) {
-            pending.insert(field.to_string(), reason.to_string());
+    if let Ok(mut pending) = pending.lock() {
+        pending.clear();
+        for item in &required {
+            if let (Some(field), Some(reason)) = (
+                item.get("field").and_then(|v| v.as_str()),
+                item.get("reason").and_then(|v| v.as_str()),
+            ) {
+                pending.insert(field.to_string(), reason.to_string());
+            }
         }
+    } else {
+        warn!("config: could not update restart-required state");
     }
+    required
 }
 
 fn pending_restart_json() -> Vec<serde_json::Value> {
@@ -991,25 +1016,10 @@ pub(crate) fn handle_config(
         match config::reload() {
             Ok(()) => {
                 let after = serde_json::to_value(config::get()).unwrap_or_default();
-                let restart_fields = [
-                    ("admin.port", "管理 WebUI 端口在启动时绑定"),
-                    ("log.enabled", "日志输出管线在启动时创建"),
-                    ("log.level", "日志过滤器在启动时创建"),
-                    ("self_qq", "机器人身份自检在启动时执行"),
-                    ("auto_start_users", "自动启动私聊名单在启动时应用"),
-                    ("auto_start_groups", "自动启动群聊名单在启动时应用"),
-                ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
-                    ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
-                ];
-                let restart_required: Vec<serde_json::Value> = restart_fields
-                    .iter()
-                    .filter(|(path, _)| config_path_value(&before, path) != config_path_value(&after, path))
-                    .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
-                    .collect();
+                let restart_required = sync_pending_restart(&after);
                 let reauth_required = config_path_value(&before, "admin.token")
                     != config_path_value(&after, "admin.token");
                 let requires_restart = !restart_required.is_empty();
-                record_restart_required(&restart_required);
                 return ok(serde_json::json!({
                     "ok": true,
                     "applied": true,
@@ -1082,26 +1092,8 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 return err(400, &format!("人设文件不存在（未写入）: {}", prompt_path.display()));
             }
 
-            // 这些设置绑定了启动时创建的资源，更新 Config 快照并不能让对应资源
-            // 自动重建；明确告知用户，不把“配置已热重载”误报成“全部即时生效”。
-            let restart_fields = [
-                ("admin.port", "管理 WebUI 端口在启动时绑定"),
-                ("log.enabled", "日志输出管线在启动时创建"),
-                ("log.level", "日志过滤器在启动时创建"),
-                ("self_qq", "机器人身份自检在启动时执行"),
-                ("auto_start_users", "自动启动私聊名单在启动时应用"),
-                ("auto_start_groups", "自动启动群聊名单在启动时应用"),
-            ];
-            let restart_required: Vec<serde_json::Value> = restart_fields
-                .iter()
-                 .filter(|(path, _)| config_path_value(&active_cfg, path) != config_path_value(&merged, path))
-                .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
-                .collect();
-
             let reauth_required =
                 config_path_value(&active_cfg, "admin.token") != config_path_value(&merged, "admin.token");
-            let requires_restart = !restart_required.is_empty();
-            record_restart_required(&restart_required);
 
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
@@ -1109,6 +1101,9 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             if let Err(e) = config::reload() {
                 return err(500, &format!("配置已保存，但运行时应用失败：{e}"));
             }
+            let active_after = serde_json::to_value(config::get()).unwrap_or_default();
+            let restart_required = sync_pending_restart(&active_after);
+            let requires_restart = !restart_required.is_empty();
             ok(serde_json::json!({
                 "ok": true,
                 "applied": true,
