@@ -10,6 +10,7 @@
 pub(crate) mod archive;
 pub(crate) mod diary;
 pub(crate) mod foraging;
+pub(crate) mod growth_lab;
 pub(crate) mod persons;
 pub(crate) mod recall;
 pub(crate) mod security;
