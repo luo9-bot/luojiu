@@ -937,8 +937,20 @@ pub(crate) fn handle_config(
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     // GET /api/config/status — 配置解析状态
     if *method == Method::Get && segs.first() == Some(&"status") {
-        let err = config::error_message();
-        return ok(serde_json::json!({"ok": err.is_empty(), "error": err}));
+        let error = config::error_message();
+        let runtime = serde_json::to_value(config::get()).ok();
+        let disk = std::fs::read_to_string(config::data_dir().join("config.yaml"))
+            .ok()
+            .and_then(|content| serde_yaml::from_str::<serde_json::Value>(&content).ok());
+        let pending_file_changes = match (&runtime, &disk) {
+            (Some(active), Some(saved)) => active != saved,
+            _ => false,
+        };
+        return ok(serde_json::json!({
+            "ok": error.is_empty(),
+            "error": error,
+            "pending_file_changes": pending_file_changes
+        }));
     }
     // POST /api/config/reload — 热重载配置
     if *method == Method::Post && segs.first() == Some(&"reload") {
@@ -958,13 +970,11 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
     let config_path = config::data_dir().join("config.yaml");
     match method {
         Method::Get => {
-            let data = match std::fs::read_to_string(&config_path) {
-                Ok(d) => d,
-                Err(_) => return err(404, "config.yaml not found"),
-            };
-            let mut cfg: serde_json::Value = match serde_yaml::from_str(&data) {
+            // 展示当前运行时快照，而不是未经应用的磁盘内容。
+            // GET /api/config/status 会单独提示文件是否存在待载入修改。
+            let mut cfg: serde_json::Value = match serde_json::to_value(config::get()) {
                 Ok(v) => v,
-                Err(e) => return err(500, &format!("parse config: {}", e)),
+                Err(e) => return err(500, &format!("serialize runtime config: {e}")),
             };
             // 脱敏：隐藏 api_key
             if let Some(obj) = cfg.as_object_mut() {
@@ -1049,6 +1059,7 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
 
             let reauth_required =
                 config_path_value(&existing_cfg, "admin.token") != config_path_value(&merged, "admin.token");
+            let requires_restart = !restart_required.is_empty();
 
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
@@ -1061,7 +1072,7 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 "applied": true,
                 "restart_required": restart_required,
                 "reauth_required": reauth_required,
-                "message": if restart_required.is_empty() {
+                "message": if !requires_restart {
                     "配置已保存并应用到运行时".to_string()
                 } else {
                     "可热更新项已立即应用；部分配置需要重启才能完全生效".to_string()
