@@ -304,6 +304,8 @@ pub extern "C" fn plugin_main() {
         .init();
 
     config::init();
+    // Growth Lab Phase A is initialized before live message processing; it only records telemetry.
+    mind::growth_lab::init();
     debug!(model = %config::get().model, "plugin loaded");
 
     // 初始化 PromptManager（加载所有 .prompt 模板文件）
