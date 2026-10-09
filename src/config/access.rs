@@ -44,7 +44,14 @@ pub(crate) fn error_message() -> String {
 /// 重新载入配置文件（热重载，无需重启插件）
 pub(crate) fn reload() -> Result<(), String> {
     let config_path = data_dir().join("config.yaml");
-    let content = fs::read_to_string(&config_path).map_err(|e| format!("读取配置失败: {}", e))?;
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let message = format!("读取配置失败：{error}");
+            *CONFIG_ERROR.write_recover() = message.clone();
+            return Err(message);
+        }
+    };
     let config: Config = match serde_yaml::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
