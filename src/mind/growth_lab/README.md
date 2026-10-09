@@ -25,6 +25,10 @@ The event is recorded after the score has been computed. The observer's return v
 
 The file contains behavioral metadata and can still reveal usage patterns. Protect it as operational data, restrict filesystem access, and apply a retention policy appropriate to your deployment. Phase A does not transmit data over the network.
 
+## WebUI
+
+The authenticated admin console exposes the live report at **实验 → 成长观测** via `GET /api/growth-lab`. The observer reconstructs its aggregate counters once at startup, then maintains a bounded in-memory summary as new events are written. The API returns aggregate counters and at most 200 recent events; it does not rescan the entire JSONL file on each page refresh.
+
 ## What Phase A can and cannot prove
 
 It can establish distributions such as gate scores, silence/pass rates, and score-feature trends over time. By itself, that is **not proof of growth**: a score distribution may shift because the traffic mix changed.
