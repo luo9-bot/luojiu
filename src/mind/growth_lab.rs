@@ -172,12 +172,12 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
                     // Rehydrate counters once at startup. Subsequent WebUI requests use
                     // the bounded in-memory snapshot and do not scan this file again.
                     let mut summary = Summary::default();
-                    if path.exists() {
-                        if let Ok(existing) = File::open(&path) {
-                            for line in BufReader::new(existing).lines().map_while(Result::ok) {
-                                if let Ok(event) = serde_json::from_str::<Value>(&line) {
-                                    summary.push(&event);
-                                }
+                    if path.exists()
+                        && let Ok(existing) = File::open(&path)
+                    {
+                        for line in BufReader::new(existing).lines().map_while(Result::ok) {
+                            if let Ok(event) = serde_json::from_str::<Value>(&line) {
+                                summary.push(&event);
                             }
                         }
                     }
@@ -386,9 +386,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn decision_label_matches_existing_gate_comparison() {
-        assert!(0.18_f32 >= 0.18_f32);
-        assert!(!(0.17_f32 >= 0.18_f32));
-    }
 }
