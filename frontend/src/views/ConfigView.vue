@@ -377,7 +377,14 @@ async function saveConfig() {
 async function reloadConfig() {
   try {
     const r = await api('/api/config/reload', { method: 'POST' })
-    applyNotice.value = r.message || '配置文件已重新载入并应用'
+    if (r.reauth_required) {
+      window.dispatchEvent(new CustomEvent('auth-expired'))
+      return
+    }
+    const restart = r.restart_required || []
+    applyNotice.value = restart.length
+      ? (r.message || '配置文件已重新载入') + '；需重启/专用操作的项目：' + restart.map(x => x.field + '（' + x.reason + '）').join('；')
+      : (r.message || '配置文件已重新载入并应用')
     await load()
   } catch (e) { alert('重载失败: ' + e.message) }
 }
