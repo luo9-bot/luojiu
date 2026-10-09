@@ -221,7 +221,11 @@ pub(crate) fn observe_speak_gate(
         batch_size,
         score: breakdown.total,
         threshold,
-        decision: if breakdown.total >= threshold { "pass" } else { "silent" },
+        decision: if breakdown.total >= threshold {
+            "pass"
+        } else {
+            "silent"
+        },
         topic_relevance: breakdown.topic_relevance,
         attention_max: breakdown.attention_max,
         unanswered_bonus: breakdown.unanswered_bonus,
@@ -305,7 +309,13 @@ mod tests {
         assert_eq!(summary.pass_count, 101);
         assert_eq!(summary.silent_count, 100);
         assert_eq!(summary.recent.len(), RECENT_LIMIT);
-        assert_eq!(summary.recent.front().and_then(|e| e["timestamp_unix"].as_u64()), Some(1));
+        assert_eq!(
+            summary
+                .recent
+                .front()
+                .and_then(|e| e["timestamp_unix"].as_u64()),
+            Some(1)
+        );
     }
 
     #[test]
