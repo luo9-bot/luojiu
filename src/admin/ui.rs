@@ -1,4 +1,4 @@
-pub const HTML: &str = r##"<!DOCTYPE html>
+pub(super) const HTML: &str = r##"<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
