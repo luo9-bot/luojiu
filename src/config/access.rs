@@ -190,6 +190,54 @@ mod tests {
         );
     }
 
+    /// 后端 Config 的每个可配置叶子都必须在 WebUI 中有编辑入口。
+    /// 复杂结构（例如 quota.segments）允许由一个 JSON 编辑字段整体承载。
+    #[test]
+    fn every_config_leaf_is_exposed_in_admin_ui() {
+        let config_value: serde_yaml::Value =
+            serde_yaml::to_value(reference_config()).expect("配置必须可序列化");
+        let view = include_str!("../../frontend/src/views/ConfigView.vue");
+        let pattern = regex::Regex::new(r"key:\\s*'([A-Za-z0-9_.]+)'").expect("正则必须合法");
+        let ui_paths: Vec<String> = pattern
+            .captures_iter(view)
+            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+            .collect();
+
+        fn collect_leaf_paths(value: &serde_yaml::Value, prefix: &str, out: &mut Vec<String>) {
+            match value {
+                serde_yaml::Value::Mapping(map) if !map.is_empty() => {
+                    for (key, child) in map {
+                        if let Some(key) = key.as_str() {
+                            let path = if prefix.is_empty() {
+                                key.to_string()
+                            } else {
+                                format!("{prefix}.{key}")
+                            };
+                            collect_leaf_paths(child, &path, out);
+                        }
+                    }
+                }
+                _ => out.push(prefix.to_string()),
+            }
+        }
+
+        let mut leaves = Vec::new();
+        collect_leaf_paths(&config_value, "", &mut leaves);
+        let missing: Vec<String> = leaves
+            .into_iter()
+            .filter(|path| {
+                !ui_paths.iter().any(|ui_path| {
+                    path == ui_path || path.starts_with(&format!("{ui_path}."))
+                })
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "后端存在未在 WebUI 暴露的配置字段：{missing:?}"
+        );
+    }
+
     /// 按点分路径在 YAML 映射里查找；返回 `None` 表示路径不存在
     fn resolve_config_path<'a>(
         value: &'a serde_yaml::Value,
