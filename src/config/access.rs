@@ -61,6 +61,19 @@ pub(crate) fn reload() -> Result<(), String> {
         }
     };
 
+    // The running WebUI authenticates against this token on every request.
+    // Clearing it through hot reload would silently turn authentication off.
+    let current_token = CONFIG
+        .read_recover()
+        .as_ref()
+        .map(|current| current.admin.token.clone())
+        .unwrap_or_default();
+    if !current_token.is_empty() && config.admin.token.trim().is_empty() {
+        let message = "管理 Token 不能为空；如需停用管理后台，请通过受控的停服流程操作".to_string();
+        *CONFIG_ERROR.write_recover() = message.clone();
+        return Err(message);
+    }
+
     // 先读取提示词，再一次性提交运行时快照。不能在文件缺失时保留旧 Prompt，
     // 否则 WebUI 会显示新配置，而生成路径仍然使用旧人设。
     let prompt_path = data_dir().join("prompts").join(&config.prompts);
