@@ -206,6 +206,7 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
 // ── 启动服务器 ──────────────────────────────────────────────────
 
 pub(crate) fn start_server() {
+    handlers::initialize_config_baseline();
     let cfg = &config::get().admin;
     let base_port = cfg.port;
     let mut port = base_port;
