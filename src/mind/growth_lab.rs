@@ -40,7 +40,12 @@ struct Observation {
     secs_since_spoke: Option<u64>,
 }
 
-/// Start the observer during plugin initialization, not on the first live message.\npub(crate) fn init() {\n    let _ = sender();\n}\n\nfn sender() -> Option<&'static SyncSender<Observation>> {
+/// Start the observer during plugin initialization, not on the first live message.
+pub(crate) fn init() {
+    let _ = sender();
+}
+
+fn sender() -> Option<&'static SyncSender<Observation>> {
     EVENT_SENDER
         .get_or_init(|| {
             let (tx, rx) = mpsc::sync_channel::<Observation>(QUEUE_CAPACITY);
