@@ -84,15 +84,20 @@ pub(crate) fn process_expired_batches() {
     });
 
     // 处理群聊批次: 通过消息队列串行化处理，避免并发混乱
-    group_msgs.into_iter().for_each(|(group_id, mut user_msgs)| {
-        chronological(&mut user_msgs);
-        if let Some(queue) = MESSAGE_QUEUE.get()
-            && queue
-                .tx
-                .send(ProcessingTask { group_id, user_msgs })
-                .is_err()
-        {
-            warn!(group_id, "queue: 发送失败");
-        }
-    });
+    group_msgs
+        .into_iter()
+        .for_each(|(group_id, mut user_msgs)| {
+            chronological(&mut user_msgs);
+            if let Some(queue) = MESSAGE_QUEUE.get()
+                && queue
+                    .tx
+                    .send(ProcessingTask {
+                        group_id,
+                        user_msgs,
+                    })
+                    .is_err()
+            {
+                warn!(group_id, "queue: 发送失败");
+            }
+        });
 }

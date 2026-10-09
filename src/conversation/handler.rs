@@ -235,15 +235,11 @@ pub(crate) fn process_message(user_id: u64, message: &str) {
     let asleep = crate::mind::is_night() && !crisis_level.is_crisis();
     // QQ 号是私聊身份的唯一锚点；昵称只负责可读性。这里进入 mind 后仍保留 QQ，
     // 避免昵称变化或同名用户造成长期经历串线。
-    let display_name = crate::person_info::get_display_name(user_id, 0)
-        .unwrap_or_else(|| "有人".into());
+    let display_name =
+        crate::person_info::get_display_name(user_id, 0).unwrap_or_else(|| "有人".into());
     let speaker = format!("[QQ:{}|{}]", user_id, display_name);
-    let mut perception = crate::mind::transcribe_message(
-        &speaker,
-        crate::util::now_secs(),
-        &ai_message,
-        false,
-    );
+    let mut perception =
+        crate::mind::transcribe_message(&speaker, crate::util::now_secs(), &ai_message, false);
     if asleep {
         perception.push_str("（她在睡梦中，还没看到这条）");
     }
@@ -259,11 +255,9 @@ pub(crate) fn process_message(user_id: u64, message: &str) {
     // 联想：她能想起什么（转述入流，成为她的经历）
     let mut recall_ids = Vec::new();
     for line in crate::mind::recall::recall_for(&ai_message, user_id, 0) {
-        let mut event = crate::mind::StreamEvent::new(
-            crate::mind::StreamKind::Sensation,
-            line.clone(),
-        )
-        .with_about(user_id);
+        let mut event =
+            crate::mind::StreamEvent::new(crate::mind::StreamKind::Sensation, line.clone())
+                .with_about(user_id);
         if let Some(source) = crate::mind::recall::source_for(&line) {
             let id = crate::mind::recall::recall_id(user_id, 0, &line);
             recall_ids.push(id.clone());
@@ -307,7 +301,7 @@ pub(crate) fn process_message(user_id: u64, message: &str) {
         crate::mind::recall::release_turn(&recall_ids);
     }
     match action {
-        VoiceAction::Failed => {},
+        VoiceAction::Failed => {}
         VoiceAction::Reply(reply) => {
             crate::mind::stream::push(
                 crate::mind::StreamEvent::new(crate::mind::StreamKind::Acted, reply.clone())
@@ -554,7 +548,11 @@ pub(crate) fn process_group_batch(group_id: u64, user_msgs: &[GroupBatch]) {
         debug!(group_id, "voice: 本批明确对其他群友说话，继续旁听");
         return;
     }
-    if silence_cooling(group_id) && !focus.is_called() && !addressed && focus.followed_up_by.is_empty() {
+    if silence_cooling(group_id)
+        && !focus.is_called()
+        && !addressed
+        && focus.followed_up_by.is_empty()
+    {
         debug!(group_id, "voice: silence cooldown, skipping");
         return;
     }
@@ -605,12 +603,7 @@ fn speak_and_deliver_group(
         let display_name = crate::person_info::get_display_name(u.user_id, group_id)
             .unwrap_or_else(|| "群友".into());
         let speaker = format!("[QQ:{}|{}]", u.user_id, display_name);
-        let mut perception = crate::mind::transcribe_message(
-            &speaker,
-            u.ts,
-            &u.text,
-            false,
-        );
+        let mut perception = crate::mind::transcribe_message(&speaker, u.ts, &u.text, false);
         if asleep {
             perception.push_str("（她在睡梦中，还没看到这条）");
         }
@@ -702,11 +695,9 @@ fn speak_and_deliver_group(
         .join("\n");
     let mut recall_ids = Vec::new();
     for line in crate::mind::recall::recall_for(&joined_text, primary, group_id) {
-        let mut event = crate::mind::StreamEvent::new(
-            crate::mind::StreamKind::Sensation,
-            line.clone(),
-        )
-        .with_about(primary);
+        let mut event =
+            crate::mind::StreamEvent::new(crate::mind::StreamKind::Sensation, line.clone())
+                .with_about(primary);
         if let Some(source) = crate::mind::recall::source_for(&line) {
             let id = crate::mind::recall::recall_id(primary, group_id, &line);
             recall_ids.push(id.clone());

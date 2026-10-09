@@ -265,9 +265,9 @@ mod tests {
         let missing: Vec<String> = leaves
             .into_iter()
             .filter(|path| {
-                !ui_paths.iter().any(|ui_path| {
-                    path == ui_path || path.starts_with(&format!("{ui_path}."))
-                })
+                !ui_paths
+                    .iter()
+                    .any(|ui_path| path == ui_path || path.starts_with(&format!("{ui_path}.")))
             })
             .collect();
 

@@ -210,10 +210,7 @@ fn defaults() -> Vec<(&'static str, &'static str, Vec<&'static str>)> {
             "history_attention",
             "../../defaults/history_attention.prompt"
         ),
-        tpl!(
-            "attention_drift",
-            "../../defaults/attention_drift.prompt"
-        ),
+        tpl!("attention_drift", "../../defaults/attention_drift.prompt"),
         tpl!(
             "reply_effect_judge",
             "../../defaults/reply_effect_judge.prompt"

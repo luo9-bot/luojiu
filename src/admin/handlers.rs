@@ -16,7 +16,10 @@ const RESTART_FIELDS: [(&str, &str); 7] = [
     ("self_qq", "机器人身份自检在启动时执行"),
     ("auto_start_users", "自动启动私聊名单在启动时应用"),
     ("auto_start_groups", "自动启动群聊名单在启动时应用"),
-    ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
+    (
+        "blacklist",
+        "黑名单配置只在启动时同步；运行时请通过黑名单页面管理",
+    ),
 ];
 
 pub(crate) fn initialize_config_baseline() {
@@ -24,8 +27,8 @@ pub(crate) fn initialize_config_baseline() {
 }
 
 fn sync_pending_restart(active: &serde_json::Value) -> Vec<serde_json::Value> {
-    let baseline = STARTUP_CONFIG
-        .get_or_init(|| serde_json::to_value(config::get()).unwrap_or_default());
+    let baseline =
+        STARTUP_CONFIG.get_or_init(|| serde_json::to_value(config::get()).unwrap_or_default());
     let required: Vec<serde_json::Value> = RESTART_FIELDS
         .iter()
         .filter(|(path, _)| config_path_value(baseline, path) != config_path_value(active, path))
@@ -388,10 +391,7 @@ pub(crate) fn handle_working_memory(
 
 // ── Handler: 情绪 ──────────────────────────────────────────────
 
-pub(crate) fn handle_emotion(
-    method: &Method,
-    segs: &[&str],
-) -> Response<std::io::Cursor<Vec<u8>>> {
+pub(crate) fn handle_emotion(method: &Method, segs: &[&str]) -> Response<std::io::Cursor<Vec<u8>>> {
     match method {
         Method::Get => {
             // 控制总览的 3D 核心驱动数据：四维情绪向量聚合
@@ -493,10 +493,7 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
             continue;
         };
         users += 1;
-        let intensity = v
-            .get("intensity")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.3) as f32;
+        let intensity = v.get("intensity").and_then(|x| x.as_f64()).unwrap_or(0.3) as f32;
         let w = intensity.max(0.05);
         let vec = emotion_vector(&etype);
         for i in 0..4 {
@@ -551,13 +548,7 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
         annoy_sum += num("annoyance");
         rel_n += 1;
     }
-    let rel_avg = |sum: f32| -> f32 {
-        if rel_n > 0 {
-            sum / rel_n as f32
-        } else {
-            0.0
-        }
-    };
+    let rel_avg = |sum: f32| -> f32 { if rel_n > 0 { sum / rel_n as f32 } else { 0.0 } };
     let (curiosity_rel, affection, trust, reciprocity, tension, annoyance) = (
         rel_avg(cur_sum),
         rel_avg(aff_sum),
@@ -587,11 +578,10 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
     // ── 4. 四维融合 ──
     let mut joy = clamp01(0.65 * emo_joy + 0.35 * affinity);
     let curiosity = clamp01(0.5 * emo_cur + 0.5 * if rel_n > 0 { curiosity_rel } else { 0.4 });
-    let empathy = clamp01(
-        0.5 * emo_emp + 0.5 * (affinity + trust_v + reciprocity_v) / 3.0,
-    );
+    let empathy = clamp01(0.5 * emo_emp + 0.5 * (affinity + trust_v + reciprocity_v) / 3.0);
     let battery_stress = 1.0 - battery.unwrap_or(0.5);
-    let mut stress = clamp01(0.55 * emo_stress + 0.25 * (tension + annoyance) / 2.0 + 0.20 * battery_stress);
+    let mut stress =
+        clamp01(0.55 * emo_stress + 0.25 * (tension + annoyance) / 2.0 + 0.20 * battery_stress);
     if crisis_hits > 0 {
         stress = stress.max(0.6);
     }
@@ -983,7 +973,10 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             let existing_cfg: config::Config = match serde_yaml::from_str(&existing) {
                 Ok(value) => value,
                 Err(error) => {
-                    return err(409, &format!("磁盘配置无法解析，拒绝覆盖以免丢失配置：{error}"));
+                    return err(
+                        409,
+                        &format!("磁盘配置无法解析，拒绝覆盖以免丢失配置：{error}"),
+                    );
                 }
             };
             let existing_cfg = match serde_json::to_value(existing_cfg) {
@@ -996,7 +989,10 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             // disk changes or overwriting them with stale UI values.
             let active_cfg = serde_json::to_value(config::get()).unwrap_or_default();
             if active_cfg != existing_cfg {
-                return err(409, "磁盘配置与运行时配置不一致；请先刷新状态，并选择“从文件重新载入”或恢复磁盘配置后再保存。");
+                return err(
+                    409,
+                    "磁盘配置与运行时配置不一致；请先刷新状态，并选择“从文件重新载入”或恢复磁盘配置后再保存。",
+                );
             }
 
             // 深合并：新配置中未发送的嵌套字段保留原值。
@@ -1013,7 +1009,10 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             };
             let prompt_path = config::data_dir().join("prompts").join(&parsed.prompts);
             if !prompt_path.is_file() {
-                return err(400, &format!("人设文件不存在（未写入）: {}", prompt_path.display()));
+                return err(
+                    400,
+                    &format!("人设文件不存在（未写入）: {}", prompt_path.display()),
+                );
             }
             if let Err(error) = config::validate_admin_token_transition(
                 &config::get().admin.token,
@@ -1022,8 +1021,8 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 return err(400, &format!("{error}；配置未写入"));
             }
 
-            let reauth_required =
-                config_path_value(&active_cfg, "admin.token") != config_path_value(&merged, "admin.token");
+            let reauth_required = config_path_value(&active_cfg, "admin.token")
+                != config_path_value(&merged, "admin.token");
 
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
@@ -1391,8 +1390,12 @@ fn restore_config_secrets(new_value: &mut serde_json::Value, old_value: &serde_j
 }
 
 /// Resolve a dotted path in a JSON value; used to report settings that require restart.
-fn config_path_value<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
-    path.split('.').try_fold(value, |current, segment| current.get(segment))
+fn config_path_value<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    path.split('.')
+        .try_fold(value, |current, segment| current.get(segment))
 }
 
 fn deep_merge(base: &serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
@@ -1474,10 +1477,7 @@ fn mind_now() -> serde_json::Value {
     })
 }
 
-pub(crate) fn handle_mind(
-    method: &Method,
-    segs: &[&str],
-) -> Response<std::io::Cursor<Vec<u8>>> {
+pub(crate) fn handle_mind(method: &Method, segs: &[&str]) -> Response<std::io::Cursor<Vec<u8>>> {
     let section = segs.first().copied().unwrap_or("");
     let rest = &segs[1.min(segs.len())..];
     match (method, section) {
@@ -1555,4 +1555,3 @@ mod config_admin_tests {
         assert_eq!(edited["search"]["api_key"], "new...search...secret");
     }
 }
-

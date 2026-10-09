@@ -123,7 +123,14 @@ pub(crate) struct BatchBuffer {
 }
 
 impl BatchBuffer {
-    pub(crate) fn append(&mut self, group_id: u64, user_id: u64, message: &str, entry_id: u64, urgent: bool) {
+    pub(crate) fn append(
+        &mut self,
+        group_id: u64,
+        user_id: u64,
+        message: &str,
+        entry_id: u64,
+        urgent: bool,
+    ) {
         let key: CtxKey = (group_id, user_id);
         let now = Instant::now();
         let arrived = crate::util::now_secs();
@@ -153,11 +160,13 @@ impl BatchBuffer {
     }
 
     /// 各对话流此刻的聚合现场（只统计未被 `is_busy` 认领的批次）
-    fn stream_summaries(&self, is_busy: &impl Fn(CtxKey) -> bool) -> HashMap<StreamKey, StreamSnapshot> {
-        self.batches
-            .iter()
-            .filter(|(key, _)| !is_busy(**key))
-            .fold(HashMap::new(), |mut snapshots, (&key, batch)| {
+    fn stream_summaries(
+        &self,
+        is_busy: &impl Fn(CtxKey) -> bool,
+    ) -> HashMap<StreamKey, StreamSnapshot> {
+        self.batches.iter().filter(|(key, _)| !is_busy(**key)).fold(
+            HashMap::new(),
+            |mut snapshots, (&key, batch)| {
                 snapshots
                     .entry(StreamKey::of(key))
                     .and_modify(|snapshot| snapshot.absorb(batch))
@@ -167,7 +176,8 @@ impl BatchBuffer {
                         urgent: batch.urgent,
                     });
                 snapshots
-            })
+            },
+        )
     }
 
     /// 取出所有"这段话说完了"（或被点名、或等太久）的批次

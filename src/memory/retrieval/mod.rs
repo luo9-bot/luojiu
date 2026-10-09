@@ -51,12 +51,13 @@ pub(crate) fn dual_path_retrieve(
     let bm25_results = bm25::search(query, memories, config.top_k * 2);
 
     // 步骤2: 向量语义检索（只使用缓存的查询向量，不阻塞调用 API）
-    let mut vector_results = if let Some(query_embedding) = vector::get_cached_query_embedding(query) {
-        vector::search(&query_embedding, embeddings, config.top_k * 2)
-    } else {
-        // 没有缓存的查询向量，跳过向量检索，纯 BM25 结果
-        Vec::new()
-    };
+    let mut vector_results =
+        if let Some(query_embedding) = vector::get_cached_query_embedding(query) {
+            vector::search(&query_embedding, embeddings, config.top_k * 2)
+        } else {
+            // 没有缓存的查询向量，跳过向量检索，纯 BM25 结果
+            Vec::new()
+        };
     vector_results.retain(|result| result.score >= config.min_vector_similarity);
 
     // 步骤3: Weighted RRF 融合
