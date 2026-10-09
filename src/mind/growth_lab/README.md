@@ -27,7 +27,7 @@ The file contains behavioral metadata and can still reveal usage patterns. Prote
 
 ## WebUI
 
-The authenticated admin console exposes the live report at **实验 → 成长观测** via `GET /api/growth-lab`. The observer reconstructs its aggregate counters once at startup, then maintains a bounded in-memory summary as new events are written. The API returns aggregate counters and at most 200 recent events; it does not rescan the entire JSONL file on each page refresh.
+The authenticated admin console exposes the live report at **实验 → 成长观测** via `GET /api/growth-lab`. The observer reconstructs its aggregate counters once at startup, then maintains a bounded in-memory summary as new events are written. The API returns aggregate counters and at most 200 recent events; it does not rescan the entire JSONL file on each page refresh. The report also distinguishes `starting`, `ready`, and `error` observer states, and shows write errors and dropped events for the current process. `available` means at least one valid event was observed; an empty file alone does not count as data.
 
 ## What Phase A can and cannot prove
 
