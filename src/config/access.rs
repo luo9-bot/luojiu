@@ -54,15 +54,19 @@ pub(crate) fn reload() -> Result<(), String> {
         }
     };
 
-    // 解析成功，清除错误标记
-    *CONFIG_ERROR.write_recover() = String::new();
-
     // 先读取提示词，再一次性提交运行时快照。不能在文件缺失时保留旧 Prompt，
     // 否则 WebUI 会显示新配置，而生成路径仍然使用旧人设。
     let prompt_path = data_dir().join("prompts").join(&config.prompts);
-    let prompt_content = fs::read_to_string(&prompt_path)
-        .map_err(|e| format!("读取人设文件失败（{}）：{e}", prompt_path.display()))?;
+    let prompt_content = match fs::read_to_string(&prompt_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let message = format!("读取人设文件失败（{}）：{error}", prompt_path.display());
+            *CONFIG_ERROR.write_recover() = message.clone();
+            return Err(message);
+        }
+    };
 
+    *CONFIG_ERROR.write_recover() = String::new();
     *PROMPT.write_recover() = prompt_content;
     *CONFIG.write_recover() = Some(config);
     debug!("config: hot-reloaded successfully");
