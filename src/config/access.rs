@@ -197,7 +197,7 @@ mod tests {
         let config_value: serde_yaml::Value =
             serde_yaml::to_value(reference_config()).expect("配置必须可序列化");
         let view = include_str!("../../frontend/src/views/ConfigView.vue");
-        let pattern = regex::Regex::new(r"key:\\s*'([A-Za-z0-9_.]+)'").expect("正则必须合法");
+        let pattern = regex::Regex::new(r"key:\s*'([A-Za-z0-9_.]+)'").expect("正则必须合法");
         let ui_paths: Vec<String> = pattern
             .captures_iter(view)
             .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
