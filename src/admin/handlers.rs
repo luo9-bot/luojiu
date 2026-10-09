@@ -3,6 +3,38 @@ use tracing::warn;
 
 use crate::config;
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
+static PENDING_RESTART: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+
+fn record_restart_required(items: &[serde_json::Value]) {
+    let pending = PENDING_RESTART.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let Ok(mut pending) = pending.lock() else {
+        warn!("config: could not record restart-required fields");
+        return;
+    };
+    for item in items {
+        if let (Some(field), Some(reason)) = (
+            item.get("field").and_then(|v| v.as_str()),
+            item.get("reason").and_then(|v| v.as_str()),
+        ) {
+            pending.insert(field.to_string(), reason.to_string());
+        }
+    }
+}
+
+fn pending_restart_json() -> Vec<serde_json::Value> {
+    let pending = PENDING_RESTART.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let Ok(pending) = pending.lock() else {
+        return Vec::new();
+    };
+    pending
+        .iter()
+        .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+        .collect()
+}
+
 use super::backup;
 use super::{err, ok, parse_json};
 
@@ -949,7 +981,8 @@ pub(crate) fn handle_config(
         return ok(serde_json::json!({
             "ok": error.is_empty(),
             "error": error,
-            "pending_file_changes": pending_file_changes
+            "pending_file_changes": pending_file_changes,
+            "restart_required": pending_restart_json()
         }));
     }
     // POST /api/config/reload — 热重载配置文件并报告不能热应用的启动期设置。
@@ -965,6 +998,7 @@ pub(crate) fn handle_config(
                     ("self_qq", "机器人身份自检在启动时执行"),
                     ("auto_start_users", "自动启动私聊名单在启动时应用"),
                     ("auto_start_groups", "自动启动群聊名单在启动时应用"),
+                ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
                     ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
                 ];
                 let restart_required: Vec<serde_json::Value> = restart_fields
@@ -975,6 +1009,7 @@ pub(crate) fn handle_config(
                 let reauth_required = config_path_value(&before, "admin.token")
                     != config_path_value(&after, "admin.token");
                 let requires_restart = !restart_required.is_empty();
+                record_restart_required(&restart_required);
                 return ok(serde_json::json!({
                     "ok": true,
                     "applied": true,
@@ -1066,6 +1101,7 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             let reauth_required =
                 config_path_value(&active_cfg, "admin.token") != config_path_value(&merged, "admin.token");
             let requires_restart = !restart_required.is_empty();
+            record_restart_required(&restart_required);
 
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
