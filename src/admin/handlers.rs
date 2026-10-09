@@ -1449,9 +1449,9 @@ fn restore_config_secrets(new_value: &mut serde_json::Value, old_value: &serde_j
         serde_json::Value::Object(new_object) => {
             for (key, child) in new_object.iter_mut() {
                 let old_child = old_value.get(key);
-                let is_mask = child.as_str().is_some_and(|value| {
-                    value == SECRET_MASK || value.contains("...")
-                });
+                // Only the exact sentinel means "unchanged". A legitimate new key may
+                // contain three dots and must not be silently replaced by the old secret.
+                let is_mask = child.as_str() == Some(SECRET_MASK);
                 if (key == "api_key" || key == "token") && is_mask {
                     if let Some(old_secret) = old_child {
                         *child = old_secret.clone();
@@ -1617,3 +1617,26 @@ pub(crate) fn handle_mind(
         _ => err(404, "not found"),
     }
 }
+
+#[cfg(test)]
+mod config_admin_tests {
+    use super::*;
+
+    #[test]
+    fn secret_restore_only_treats_the_exact_mask_as_unchanged() {
+        let old = serde_json::json!({
+            "api_key": "previous-secret",
+            "search": { "api_key": "previous-search-secret" }
+        });
+        let mut edited = serde_json::json!({
+            "api_key": SECRET_MASK,
+            "search": { "api_key": "new...search...secret" }
+        });
+
+        restore_config_secrets(&mut edited, &old);
+
+        assert_eq!(edited["api_key"], "previous-secret");
+        assert_eq!(edited["search"]["api_key"], "new...search...secret");
+    }
+}
+
