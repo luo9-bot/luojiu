@@ -1017,9 +1017,16 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 Err(e) => return err(400, &format!("invalid json: {}", e)),
             };
             // 读取现有配置以保留未发送的字段
-            let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-            let existing_cfg: serde_json::Value =
-                serde_yaml::from_str(&existing).unwrap_or(serde_json::json!({}));
+            let existing = match std::fs::read_to_string(&config_path) {
+                Ok(content) => content,
+                Err(error) => return err(500, &format!("读取现有配置失败（未写入）: {error}")),
+            };
+            let existing_cfg: serde_json::Value = match serde_yaml::from_str(&existing) {
+                Ok(value) => value,
+                Err(error) => {
+                    return err(409, &format!("磁盘配置无法解析，拒绝覆盖以免丢失配置：{error}"));
+                }
+            };
 
             // 深合并：新配置中未发送的嵌套字段保留原值。
             // 同时捕获当前运行时快照，以便识别之前已写入磁盘、但尚未重启生效的设置。
