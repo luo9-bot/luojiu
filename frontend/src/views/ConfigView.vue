@@ -43,7 +43,7 @@
                   <span class="toggle-dot" :class="{ on: getVal(f) }"></span>
                   <span>{{ getVal(f) ? '是' : '否' }}</span>
                 </template>
-                <template v-else-if="f.type === 'array'">
+                <template v-else-if="f.type === 'array' || f.type === 'readonly-array'">
                   <span class="array-chips">
                     <span v-for="(item, i) in (getVal(f) || [])" :key="i" class="chip-sm">{{ item }}</span>
                     <span v-if="!(getVal(f) || []).length" class="text-muted">空</span>
@@ -85,6 +85,7 @@
             </select>
             <input v-else-if="f.type === 'array'"
                    v-model="editForm[f.key]" class="glass-input" placeholder="逗号分隔多个值" />
+            <div v-else-if="f.type === 'readonly-array'" class="readonly-hint">该字段是启动期导入项；运行时请使用专用黑名单管理页面。</div>
           </div>
         </div>
         <div class="modal-actions">
@@ -120,7 +121,7 @@ const sections = [
       { key: 'darling_qq', label: 'Darling QQ', type: 'number' },
       { key: 'prompts', label: '人设文件', type: 'string' },
       { key: 'whitelist', label: '白名单', type: 'array' },
-      { key: 'blacklist', label: '黑名单', type: 'array' },
+      { key: 'blacklist', label: '启动时导入的黑名单（请用系统→黑名单管理修改）', type: 'readonly-array' },
       { key: 'auto_start_users', label: '自动启动用户', type: 'array' },
       { key: 'auto_start_groups', label: '自动启动群', type: 'array' },
     ]
@@ -315,6 +316,7 @@ function openEdit() {
     delete editForm[key]
   }
   for (const f of currentSection.value.fields) {
+    if (f.type === 'readonly-array') continue
     const v = getVal(f)
     if (v != null) {
       editForm[f.key] = f.type === 'array' ? (Array.isArray(v) ? v.join(', ') : String(v))
@@ -336,6 +338,7 @@ async function load() {
 async function saveConfig() {
   const patch = {}
   for (const f of currentSection.value.fields) {
+    if (f.type === 'readonly-array') continue
     if (editForm[f.key] === undefined) continue
     if (f.type === 'number' && editForm[f.key] === '') continue
     const parts = f.key.split('.')
@@ -386,6 +389,7 @@ onMounted(() => { load(); window.addEventListener('refresh-all', load) })
 .config-layout { display: flex; gap: 20px; align-items: flex-start; }
 .apply-notice { padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-2); background: var(--surface); font-size: 12px; line-height: 1.6; }
 .json-input { min-height: 130px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre; }
+.readonly-hint { color: var(--text-2); font-size: 12px; line-height: 1.6; padding: 8px 0; }
 .nav-section { margin-bottom: 2px; }
 .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-xs); font-size: 12px; font-weight: 500; cursor: pointer; transition: var(--transition); color: var(--text-2); }
 .nav-item:hover { background: var(--surface-hover); color: var(--text); }
