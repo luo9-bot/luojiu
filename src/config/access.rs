@@ -41,6 +41,18 @@ pub(crate) fn error_message() -> String {
     CONFIG_ERROR.read_recover().clone()
 }
 
+/// Validate a live admin-token change without mutating runtime state.
+pub(crate) fn validate_admin_token_transition(
+    current_token: &str,
+    next_token: &str,
+) -> Result<(), String> {
+    if !current_token.is_empty() && next_token.trim().is_empty() {
+        Err("管理 Token 不能为空；如需停用管理后台，请通过受控的停服流程操作".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// 重新载入配置文件（热重载，无需重启插件）
 pub(crate) fn reload() -> Result<(), String> {
     let config_path = data_dir().join("config.yaml");
@@ -68,8 +80,7 @@ pub(crate) fn reload() -> Result<(), String> {
         .as_ref()
         .map(|current| current.admin.token.clone())
         .unwrap_or_default();
-    if !current_token.is_empty() && config.admin.token.trim().is_empty() {
-        let message = "管理 Token 不能为空；如需停用管理后台，请通过受控的停服流程操作".to_string();
+    if let Err(message) = validate_admin_token_transition(&current_token, &config.admin.token) {
         *CONFIG_ERROR.write_recover() = message.clone();
         return Err(message);
     }
@@ -128,6 +139,14 @@ pub(crate) fn save(config: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::config::init::DEFAULT_CONFIG_YAML;
+
+    #[test]
+    fn live_reload_cannot_disable_admin_authentication() {
+        assert!(validate_admin_token_transition("old-token", "").is_err());
+        assert!(validate_admin_token_transition("old-token", "   ").is_err());
+        assert!(validate_admin_token_transition("old-token", "new-token").is_ok());
+        assert!(validate_admin_token_transition("", "").is_ok());
+    }
 
     /// 默认配置的参考实例：默认值的唯一真源就是模板本身
     fn reference_config() -> Config {
