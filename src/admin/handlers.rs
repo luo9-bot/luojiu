@@ -1021,15 +1021,52 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             }
 
             // 类型化保存：反序列化成 Config 再原子落盘。
-            // 校验发生在写入之前，因此"改坏配置导致插件起不来"不可达。
-            let parsed: config::Config = match serde_json::from_value(merged) {
+            // 同时在写入前检查人设文件，避免保存后热重载失败。
+            let parsed: config::Config = match serde_json::from_value(merged.clone()) {
                 Ok(cfg) => cfg,
                 Err(e) => return err(400, &format!("配置校验失败（未写入）: {e}")),
             };
+            let prompt_path = config::data_dir().join("prompts").join(&parsed.prompts);
+            if !prompt_path.is_file() {
+                return err(400, &format!("人设文件不存在（未写入）: {}", prompt_path.display()));
+            }
+
+            // 这些设置绑定了启动时创建的资源，更新 Config 快照并不能让对应资源
+            // 自动重建；明确告知用户，不把“配置已热重载”误报成“全部即时生效”。
+            let restart_fields = [
+                ("admin.port", "管理 WebUI 端口在启动时绑定"),
+                ("log.enabled", "日志输出管线在启动时创建"),
+                ("log.level", "日志过滤器在启动时创建"),
+                ("self_qq", "机器人身份自检在启动时执行"),
+                ("auto_start_users", "自动启动私聊名单在启动时应用"),
+                ("auto_start_groups", "自动启动群聊名单在启动时应用"),
+            ];
+            let restart_required: Vec<serde_json::Value> = restart_fields
+                .iter()
+                .filter(|(path, _)| config_path_value(&existing_cfg, path) != config_path_value(&merged, path))
+                .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+                .collect();
+
+            let reauth_required =
+                config_path_value(&existing_cfg, "admin.token") != config_path_value(&merged, "admin.token");
+
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
             }
-            ok(serde_json::json!({"ok": true, "message": "配置已保存，点击「重新载入配置」生效"}))
+            if let Err(e) = config::reload() {
+                return err(500, &format!("配置已保存，但运行时应用失败：{e}"));
+            }
+            ok(serde_json::json!({
+                "ok": true,
+                "applied": true,
+                "restart_required": restart_required,
+                "reauth_required": reauth_required,
+                "message": if restart_required.is_empty() {
+                    "配置已保存并应用到运行时".to_string()
+                } else {
+                    "可热更新项已立即应用；部分配置需要重启才能完全生效".to_string()
+                }
+            }))
         }
         _ => err(405, "method not allowed"),
     }
@@ -1321,6 +1358,11 @@ pub(crate) fn handle_memory_ops_log(
 /// - 对于其他情况：新值覆盖旧值
 ///
 /// 这样前端发送部分嵌套字段时，不会丢失未发送的字段
+/// Resolve a dotted path in a JSON value; used to report settings that require restart.
+fn config_path_value<'a>(value: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
+    path.split('.').try_fold(value, |current, segment| current.get(segment))
+}
+
 fn deep_merge(base: &serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
     match (base, patch) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
