@@ -465,7 +465,7 @@ fn clamp01(v: f32) -> f32 {
 /// - 好奇 = 全员情绪加权好奇 0.5 + 关系好奇心均值 0.5
 /// - 共情 = 全员情绪加权共情 0.5 + (好感+信任+互惠)/3 0.5
 /// - 压力 = 全员情绪加权压力 0.55 + (紧张+烦躁)/2 0.25 + (1-社交余量) 0.20，
-///         有危机记录时抬底
+///   有危机记录时抬底
 /// - coherence = 平静/正面情绪的质量占比；entropy = 情绪分布香农熵(归一化)；
 ///   resonance = 平均互动频率归一化
 fn emotion_core_json() -> Result<serde_json::Value, String> {
@@ -506,10 +506,10 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
             rate_sum += rate as f32;
             rate_n += 1;
         }
-        if let Some(level) = v.get("crisis_level").and_then(|x| x.as_str()) {
-            if level != "None" {
-                crisis_hits += 1;
-            }
+        if let Some(level) = v.get("crisis_level").and_then(|x| x.as_str())
+            && level != "None"
+        {
+            crisis_hits += 1;
         }
         if *uid == 0 {
             self_state = Some(v);
