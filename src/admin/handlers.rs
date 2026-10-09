@@ -1015,6 +1015,9 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             if !prompt_path.is_file() {
                 return err(400, &format!("人设文件不存在（未写入）: {}", prompt_path.display()));
             }
+            if !config::get().admin.token.is_empty() && parsed.admin.token.trim().is_empty() {
+                return err(400, "管理 Token 不能为空；清空会关闭认证保护，配置未写入");
+            }
 
             let reauth_required =
                 config_path_value(&active_cfg, "admin.token") != config_path_value(&merged, "admin.token");
