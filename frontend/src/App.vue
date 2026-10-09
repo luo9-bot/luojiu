@@ -204,6 +204,7 @@ async function doLogin() {
   catch { loginErr.value = '网络错误' }
 }
 function doLogout() { clearToken(); loggedIn.value = false }
+function handleAuthExpired() { clearToken(); loggedIn.value = false }
 function refreshAll() { window.dispatchEvent(new CustomEvent('refresh-all')) }
 
 async function pingCore() {
@@ -212,6 +213,7 @@ async function pingCore() {
 }
 
 onMounted(async () => {
+  window.addEventListener('auth-expired', handleAuthExpired)
   initTheme()
   const t = getToken()
   if (t) { try { if (await tryLogin(t)) loggedIn.value = true } catch {} }
@@ -219,7 +221,10 @@ onMounted(async () => {
   pingCore()
   statusTimer = setInterval(pingCore, 30000)
 })
-onUnmounted(() => { if (statusTimer) clearInterval(statusTimer) })
+onUnmounted(() => {
+  if (statusTimer) clearInterval(statusTimer)
+  window.removeEventListener('auth-expired', handleAuthExpired)
+})
 </script>
 
 <style>
