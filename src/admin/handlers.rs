@@ -990,7 +990,9 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             let existing_cfg: serde_json::Value =
                 serde_yaml::from_str(&existing).unwrap_or(serde_json::json!({}));
 
-            // 深合并：新配置中未发送的嵌套字段保留原值
+            // 深合并：新配置中未发送的嵌套字段保留原值。
+            // 同时捕获当前运行时快照，以便识别之前已写入磁盘、但尚未重启生效的设置。
+            let active_cfg = serde_json::to_value(config::get()).unwrap_or_default();
             let mut merged = deep_merge(&existing_cfg, &new_cfg);
 
             // 遮罩字段还原覆盖全部嵌套配置，未修改的密钥不会被写成遮罩字符串。
@@ -1019,12 +1021,12 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
             ];
             let restart_required: Vec<serde_json::Value> = restart_fields
                 .iter()
-                .filter(|(path, _)| config_path_value(&existing_cfg, path) != config_path_value(&merged, path))
+                 .filter(|(path, _)| config_path_value(&active_cfg, path) != config_path_value(&merged, path))
                 .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
                 .collect();
 
             let reauth_required =
-                config_path_value(&existing_cfg, "admin.token") != config_path_value(&merged, "admin.token");
+                config_path_value(&active_cfg, "admin.token") != config_path_value(&merged, "admin.token");
             let requires_restart = !restart_required.is_empty();
 
             if let Err(e) = config::save(&parsed) {
