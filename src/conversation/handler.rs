@@ -656,6 +656,8 @@ fn speak_and_deliver_group(
             focus.addressing_strength(),
         );
         let gate = crate::mind::social::speak_gate();
+        // Phase A: observe the already-computed decision; telemetry never gates behavior.
+        crate::mind::growth_lab::observe_speak_gate(utterances.len(), &breakdown, gate);
         // 结构化单行：门限该定在哪，只能靠真实分布回答，不能靠猜。
         // 这一行带全部评分分量，可直接从日志回放复算（方案 §4 要求）。
         debug!(
