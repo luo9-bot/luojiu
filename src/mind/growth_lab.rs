@@ -293,6 +293,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn empty_dataset_is_not_reported_as_available() {
+        let summary = Summary::default();
+        assert!(!summary.available);
+        assert_eq!(summary.event_count, 0);
+    }
+
+    #[test]
+    fn public_event_contains_only_allowlisted_observation_fields() {
+        let event = serde_json::json!({
+            "event": "speak_gate",
+            "timestamp_unix": 1,
+            "batch_size": 1,
+            "score": 0.2,
+            "threshold": 0.18,
+            "decision": "pass",
+            "group_id": 123456,
+            "user_id": 654321,
+            "message": "private content",
+            "topic_relevance": 0.4
+        });
+        let public = public_event(&event);
+        let encoded = public.to_string();
+        assert!(encoded.contains("topic_relevance"));
+        assert!(!encoded.contains("group_id"));
+        assert!(!encoded.contains("user_id"));
+        assert!(!encoded.contains("private content"));
+    }
+
+    #[test]
     fn observation_schema_is_versioned_and_excludes_conversation_identity() {
         let observation = Observation {
             schema_version: 1,
