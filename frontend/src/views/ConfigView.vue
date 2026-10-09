@@ -8,6 +8,13 @@
       </div>
       <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
     </div>
+    <div v-if="pendingRestart.length" class="config-error-banner">
+      <span class="error-icon">!</span>
+      <div class="error-body">
+        <strong>部分配置尚未完全生效</strong>
+        <span v-for="item in pendingRestart" :key="item.field">{{ item.field }}：{{ item.reason }}</span>
+      </div>
+    </div>
     <div v-if="pendingFileChanges" class="config-error-banner">
       <span class="error-icon">!</span>
       <div class="error-body">
@@ -104,6 +111,7 @@ import { api, setToken } from '../api.js'
 const config = ref(null)
 const configError = ref('')
 const pendingFileChanges = ref(false)
+const pendingRestart = ref([])
 const applyNotice = ref('')
 const activeSection = ref('general')
 const showEdit = ref(false)
@@ -332,6 +340,7 @@ async function load() {
     const s = await api('/api/config/status')
     if (!configError.value) configError.value = s.ok ? '' : (s.error || '未知错误')
     pendingFileChanges.value = Boolean(s.pending_file_changes)
+    pendingRestart.value = Array.isArray(s.restart_required) ? s.restart_required : []
   } catch { pendingFileChanges.value = false }
 }
 
