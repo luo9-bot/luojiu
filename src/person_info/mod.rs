@@ -51,10 +51,10 @@ pub(crate) fn update_qq_identity(
         if let Some(name) = nickname {
             profile.qq_nickname = name.to_string();
         }
-        if group_id > 0 {
-            if let Some(name) = card.or(nickname) {
-                profile.group_nicknames.insert(group_id, name.to_string());
-            }
+        if group_id > 0
+            && let Some(name) = card.or(nickname)
+        {
+            profile.group_nicknames.insert(group_id, name.to_string());
         }
     });
 }
@@ -68,10 +68,10 @@ pub(crate) fn get_display_name(user_id: u64, group_id: u64) -> Option<String> {
     if !profile.person_name.is_empty() {
         return Some(profile.person_name);
     }
-    if group_id > 0 {
-        if let Some(name) = profile.group_nicknames.get(&group_id) {
-            return Some(name.clone());
-        }
+    if group_id > 0
+        && let Some(name) = profile.group_nicknames.get(&group_id)
+    {
+        return Some(name.clone());
     }
     if !profile.qq_nickname.is_empty() {
         return Some(profile.qq_nickname.clone());
