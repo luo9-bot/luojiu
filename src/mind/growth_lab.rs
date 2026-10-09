@@ -47,6 +47,9 @@ struct Observation {
 #[derive(Debug, Clone, Default)]
 struct Summary {
     available: bool,
+    status: String,
+    dropped_events_since_start: u64,
+    write_errors_since_start: u64,
     event_count: u64,
     pass_count: u64,
     silent_count: u64,
@@ -83,7 +86,19 @@ impl Summary {
 }
 
 fn summary_lock() -> &'static RwLock<Summary> {
-    SUMMARY.get_or_init(|| RwLock::new(Summary::default()))
+    SUMMARY.get_or_init(|| {
+        RwLock::new(Summary {
+            status: "starting".to_string(),
+            ..Summary::default()
+        })
+    })
+}
+
+fn set_worker_status(status: &str) {
+    summary_lock()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .status = status.to_string();
 }
 
 fn public_event(event: &Value) -> Value {
@@ -119,6 +134,9 @@ pub(crate) fn report() -> Value {
 
     serde_json::json!({
         "available": snapshot.available,
+        "status": if snapshot.status.is_empty() { "starting" } else { &snapshot.status },
+        "dropped_events_since_start": snapshot.dropped_events_since_start,
+        "write_errors_since_start": snapshot.write_errors_since_start,
         "event_count": snapshot.event_count,
         "pass_count": snapshot.pass_count,
         "silent_count": snapshot.silent_count,
@@ -145,6 +163,7 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
                 .spawn(move || {
                     let directory = crate::config::data_dir().join(DATASET_DIR);
                     if let Err(error) = fs::create_dir_all(&directory) {
+                        set_worker_status("error");
                         warn!(%error, "growth_lab: cannot create observation directory");
                         return;
                     }
@@ -154,7 +173,6 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
                     // the bounded in-memory snapshot and do not scan this file again.
                     let mut summary = Summary::default();
                     if path.exists() {
-                        summary.available = true;
                         if let Ok(existing) = File::open(&path) {
                             for line in BufReader::new(existing).lines().map_while(Result::ok) {
                                 if let Ok(event) = serde_json::from_str::<Value>(&line) {
@@ -170,10 +188,17 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
                     let mut file = match OpenOptions::new().create(true).append(true).open(&path) {
                         Ok(file) => file,
                         Err(error) => {
+                            set_worker_status("error");
                             warn!(%error, "growth_lab: cannot open observation dataset");
                             return;
                         }
                     };
+                    {
+                        let mut snapshot = summary_lock()
+                            .write()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        snapshot.status = "ready".to_string();
+                    }
 
                     while let Ok(observation) = rx.recv() {
                         let write_result = serde_json::to_writer(&mut file, &observation)
@@ -181,6 +206,10 @@ fn sender() -> Option<&'static SyncSender<Observation>> {
                             .and_then(|()| file.write_all(b"\n"))
                             .and_then(|()| file.flush());
                         if let Err(error) = write_result {
+                            let mut snapshot = summary_lock()
+                                .write()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                            snapshot.write_errors_since_start += 1;
                             warn!(%error, "growth_lab: observation write failed");
                             continue;
                         }
@@ -241,6 +270,10 @@ pub(crate) fn observe_speak_gate(
         match error {
             TrySendError::Full(_) => {
                 // Telemetry is best-effort; never block or alter the gate decision.
+                summary_lock()
+                    .write()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .dropped_events_since_start += 1;
             }
             TrySendError::Disconnected(_) => {
                 // The worker already logs its startup failure; avoid per-message log spam.
