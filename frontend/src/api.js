@@ -10,7 +10,11 @@ export function headers() {
 
 export async function api(path, opt = {}) {
   const r = await fetch(path, { headers: headers(), ...opt })
-  if (r.status === 401) { clearToken(); throw new Error('unauthorized') }
+  if (r.status === 401) {
+    clearToken()
+    window.dispatchEvent(new CustomEvent('auth-expired'))
+    throw new Error('unauthorized')
+  }
   const j = await r.json()
   if (!r.ok) throw new Error(j.error || 'request failed')
   return j
