@@ -952,10 +952,40 @@ pub(crate) fn handle_config(
             "pending_file_changes": pending_file_changes
         }));
     }
-    // POST /api/config/reload — 热重载配置
+    // POST /api/config/reload — 热重载配置文件并报告不能热应用的启动期设置。
     if *method == Method::Post && segs.first() == Some(&"reload") {
+        let before = serde_json::to_value(config::get()).unwrap_or_default();
         match config::reload() {
-            Ok(()) => return ok(serde_json::json!({"ok": true, "message": "配置已重新载入"})),
+            Ok(()) => {
+                let after = serde_json::to_value(config::get()).unwrap_or_default();
+                let restart_fields = [
+                    ("admin.port", "管理 WebUI 端口在启动时绑定"),
+                    ("log.enabled", "日志输出管线在启动时创建"),
+                    ("log.level", "日志过滤器在启动时创建"),
+                    ("self_qq", "机器人身份自检在启动时执行"),
+                    ("auto_start_users", "自动启动私聊名单在启动时应用"),
+                    ("auto_start_groups", "自动启动群聊名单在启动时应用"),
+                    ("blacklist", "黑名单配置只在启动时同步；运行时请通过黑名单页面管理"),
+                ];
+                let restart_required: Vec<serde_json::Value> = restart_fields
+                    .iter()
+                    .filter(|(path, _)| config_path_value(&before, path) != config_path_value(&after, path))
+                    .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+                    .collect();
+                let reauth_required = config_path_value(&before, "admin.token")
+                    != config_path_value(&after, "admin.token");
+                return ok(serde_json::json!({
+                    "ok": true,
+                    "applied": true,
+                    "restart_required": restart_required,
+                    "reauth_required": reauth_required,
+                    "message": if restart_required.is_empty() {
+                        "配置文件已重新载入并应用".to_string()
+                    } else {
+                        "配置文件已载入；部分设置仍需重启或通过专用管理页面操作".to_string()
+                    }
+                }));
+            }
             Err(e) => return err(500, &e),
         }
     }
