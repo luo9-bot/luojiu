@@ -49,7 +49,7 @@ fn frontend_fingerprint() -> Result<String, String> {
 
     let mut hash = 0xcbf29ce484222325_u64;
     for path in files {
-        let normalized_path = path.to_string_lossy().replace('\\\\', "/");
+        let normalized_path = path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
         for byte in normalized_path
             .as_bytes()
             .iter()
@@ -104,8 +104,7 @@ fn main() {
         // 允许仅分发 Rust 源码和已构建的 HTML 的场景。
         if !Path::new(DIST_HTML).is_file() {
             panic!(
-                "{FRONTEND_SRC} 和 {DIST_HTML} 均不存在，无法嵌入管理页面。\n\\
-                 请检出前端源码，或先在 frontend 目录运行：npm ci && npm run build"
+                "{FRONTEND_SRC} 和 {DIST_HTML} 均不存在，无法嵌入管理页面。\n请检出前端源码，或先在 frontend 目录运行：npm ci && npm run build"
             );
         }
         return;
@@ -122,9 +121,7 @@ fn main() {
         println!("cargo:warning=前端输入发生变化或 dist 缺失，正在重建 WebUI ...");
         if let Err(error) = build_frontend() {
             panic!(
-                "前端构建失败：{error}\n\\
-                 为避免嵌入旧页面，已中止 Cargo 构建。请确认 Node.js/npm 可用，然后运行：\n\\
-                 cd frontend && npm ci && npm run build"
+                "前端构建失败：{error}\n为避免嵌入旧页面，已中止 Cargo 构建。请确认 Node.js/npm 可用，然后运行：\ncd frontend && npm ci && npm run build"
             );
         }
         if !Path::new(DIST_HTML).is_file() {
