@@ -49,7 +49,9 @@ fn frontend_fingerprint() -> Result<String, String> {
 
     let mut hash = 0xcbf29ce484222325_u64;
     for path in files {
-        let normalized_path = path.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/");
+        let normalized_path = path
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
         for byte in normalized_path
             .as_bytes()
             .iter()
@@ -110,8 +112,8 @@ fn main() {
         return;
     }
 
-    let fingerprint = frontend_fingerprint()
-        .unwrap_or_else(|error| panic!("计算前端输入指纹失败：{error}"));
+    let fingerprint =
+        frontend_fingerprint().unwrap_or_else(|error| panic!("计算前端输入指纹失败：{error}"));
     let stamp_matches = std::fs::read_to_string(BUILD_STAMP)
         .map(|stamp| stamp.trim() == fingerprint)
         .unwrap_or(false);
@@ -125,9 +127,7 @@ fn main() {
             );
         }
         if !Path::new(DIST_HTML).is_file() {
-            panic!(
-                "前端构建命令成功退出，但 {DIST_HTML} 仍不存在；无法嵌入管理页面。"
-            );
+            panic!("前端构建命令成功退出，但 {DIST_HTML} 仍不存在；无法嵌入管理页面。");
         }
         std::fs::write(BUILD_STAMP, &fingerprint)
             .unwrap_or_else(|error| panic!("无法写入前端构建指纹 {BUILD_STAMP}：{error}"));
