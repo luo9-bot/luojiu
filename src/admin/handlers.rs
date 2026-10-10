@@ -3,6 +3,66 @@ use tracing::warn;
 
 use crate::config;
 
+use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
+
+static PENDING_RESTART: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
+static STARTUP_CONFIG: OnceLock<serde_json::Value> = OnceLock::new();
+
+const RESTART_FIELDS: [(&str, &str); 7] = [
+    ("admin.port", "管理 WebUI 端口在启动时绑定"),
+    ("log.enabled", "日志输出管线在启动时创建"),
+    ("log.level", "日志过滤器在启动时创建"),
+    ("self_qq", "机器人身份自检在启动时执行"),
+    ("auto_start_users", "自动启动私聊名单在启动时应用"),
+    ("auto_start_groups", "自动启动群聊名单在启动时应用"),
+    (
+        "blacklist",
+        "黑名单配置只在启动时同步；运行时请通过黑名单页面管理",
+    ),
+];
+
+pub(crate) fn initialize_config_baseline() {
+    let _ = STARTUP_CONFIG.set(serde_json::to_value(config::get()).unwrap_or_default());
+}
+
+fn sync_pending_restart(active: &serde_json::Value) -> Vec<serde_json::Value> {
+    let baseline =
+        STARTUP_CONFIG.get_or_init(|| serde_json::to_value(config::get()).unwrap_or_default());
+    let required: Vec<serde_json::Value> = RESTART_FIELDS
+        .iter()
+        .filter(|(path, _)| config_path_value(baseline, path) != config_path_value(active, path))
+        .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+        .collect();
+
+    let pending = PENDING_RESTART.get_or_init(|| Mutex::new(BTreeMap::new()));
+    if let Ok(mut pending) = pending.lock() {
+        pending.clear();
+        for item in &required {
+            if let (Some(field), Some(reason)) = (
+                item.get("field").and_then(|v| v.as_str()),
+                item.get("reason").and_then(|v| v.as_str()),
+            ) {
+                pending.insert(field.to_string(), reason.to_string());
+            }
+        }
+    } else {
+        warn!("config: could not update restart-required state");
+    }
+    required
+}
+
+fn pending_restart_json() -> Vec<serde_json::Value> {
+    let pending = PENDING_RESTART.get_or_init(|| Mutex::new(BTreeMap::new()));
+    let Ok(pending) = pending.lock() else {
+        return Vec::new();
+    };
+    pending
+        .iter()
+        .map(|(field, reason)| serde_json::json!({"field": field, "reason": reason}))
+        .collect()
+}
+
 use super::backup;
 use super::{err, ok, parse_json};
 
@@ -140,6 +200,17 @@ pub(crate) fn handle_dashboard() -> Response<std::io::Cursor<Vec<u8>>> {
         "active_groups": crate::get_active_groups().len(),
         "active_users": crate::get_active_users().len(),
     }))
+}
+
+// ── Growth Lab: Phase A observation dashboard ───────────────────
+
+/// Read the bounded tail of the observation log and return aggregate counters.
+/// No conversation text or identity fields are present in this dataset.
+pub(crate) fn handle_growth_lab(method: &Method) -> Response<std::io::Cursor<Vec<u8>>> {
+    if *method != Method::Get {
+        return err(405, "method not allowed");
+    }
+    ok(crate::mind::growth_lab::report())
 }
 
 // ── Handler: 用户记忆（读写 memory/users/{uid}.json 存储）──────
@@ -320,10 +391,7 @@ pub(crate) fn handle_working_memory(
 
 // ── Handler: 情绪 ──────────────────────────────────────────────
 
-pub(crate) fn handle_emotion(
-    method: &Method,
-    segs: &[&str],
-) -> Response<std::io::Cursor<Vec<u8>>> {
+pub(crate) fn handle_emotion(method: &Method, segs: &[&str]) -> Response<std::io::Cursor<Vec<u8>>> {
     match method {
         Method::Get => {
             // 控制总览的 3D 核心驱动数据：四维情绪向量聚合
@@ -397,7 +465,7 @@ fn clamp01(v: f32) -> f32 {
 /// - 好奇 = 全员情绪加权好奇 0.5 + 关系好奇心均值 0.5
 /// - 共情 = 全员情绪加权共情 0.5 + (好感+信任+互惠)/3 0.5
 /// - 压力 = 全员情绪加权压力 0.55 + (紧张+烦躁)/2 0.25 + (1-社交余量) 0.20，
-///         有危机记录时抬底
+///   有危机记录时抬底
 /// - coherence = 平静/正面情绪的质量占比；entropy = 情绪分布香农熵(归一化)；
 ///   resonance = 平均互动频率归一化
 fn emotion_core_json() -> Result<serde_json::Value, String> {
@@ -425,10 +493,7 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
             continue;
         };
         users += 1;
-        let intensity = v
-            .get("intensity")
-            .and_then(|x| x.as_f64())
-            .unwrap_or(0.3) as f32;
+        let intensity = v.get("intensity").and_then(|x| x.as_f64()).unwrap_or(0.3) as f32;
         let w = intensity.max(0.05);
         let vec = emotion_vector(&etype);
         for i in 0..4 {
@@ -441,10 +506,10 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
             rate_sum += rate as f32;
             rate_n += 1;
         }
-        if let Some(level) = v.get("crisis_level").and_then(|x| x.as_str()) {
-            if level != "None" {
-                crisis_hits += 1;
-            }
+        if let Some(level) = v.get("crisis_level").and_then(|x| x.as_str())
+            && level != "None"
+        {
+            crisis_hits += 1;
         }
         if *uid == 0 {
             self_state = Some(v);
@@ -483,13 +548,7 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
         annoy_sum += num("annoyance");
         rel_n += 1;
     }
-    let rel_avg = |sum: f32| -> f32 {
-        if rel_n > 0 {
-            sum / rel_n as f32
-        } else {
-            0.0
-        }
-    };
+    let rel_avg = |sum: f32| -> f32 { if rel_n > 0 { sum / rel_n as f32 } else { 0.0 } };
     let (curiosity_rel, affection, trust, reciprocity, tension, annoyance) = (
         rel_avg(cur_sum),
         rel_avg(aff_sum),
@@ -519,11 +578,10 @@ fn emotion_core_json() -> Result<serde_json::Value, String> {
     // ── 4. 四维融合 ──
     let mut joy = clamp01(0.65 * emo_joy + 0.35 * affinity);
     let curiosity = clamp01(0.5 * emo_cur + 0.5 * if rel_n > 0 { curiosity_rel } else { 0.4 });
-    let empathy = clamp01(
-        0.5 * emo_emp + 0.5 * (affinity + trust_v + reciprocity_v) / 3.0,
-    );
+    let empathy = clamp01(0.5 * emo_emp + 0.5 * (affinity + trust_v + reciprocity_v) / 3.0);
     let battery_stress = 1.0 - battery.unwrap_or(0.5);
-    let mut stress = clamp01(0.55 * emo_stress + 0.25 * (tension + annoyance) / 2.0 + 0.20 * battery_stress);
+    let mut stress =
+        clamp01(0.55 * emo_stress + 0.25 * (tension + annoyance) / 2.0 + 0.20 * battery_stress);
     if crisis_hits > 0 {
         stress = stress.max(0.6);
     }
@@ -836,13 +894,48 @@ pub(crate) fn handle_config(
 ) -> Response<std::io::Cursor<Vec<u8>>> {
     // GET /api/config/status — 配置解析状态
     if *method == Method::Get && segs.first() == Some(&"status") {
-        let err = config::error_message();
-        return ok(serde_json::json!({"ok": err.is_empty(), "error": err}));
+        let error = config::error_message();
+        let runtime = serde_json::to_value(config::get()).ok();
+        // Deserialize through Config first so omitted YAML defaults compare equal to
+        // the runtime snapshot. Parsing raw YAML directly as JSON creates false drift.
+        let disk = std::fs::read_to_string(config::data_dir().join("config.yaml"))
+            .ok()
+            .and_then(|content| serde_yaml::from_str::<config::Config>(&content).ok())
+            .and_then(|saved| serde_json::to_value(saved).ok());
+        // Missing or invalid disk config is not "in sync"; make the discrepancy visible.
+        let pending_file_changes = match (&runtime, &disk) {
+            (Some(active), Some(saved)) => active != saved,
+            _ => true,
+        };
+        return ok(serde_json::json!({
+            "ok": error.is_empty(),
+            "error": error,
+            "pending_file_changes": pending_file_changes,
+            "restart_required": pending_restart_json()
+        }));
     }
-    // POST /api/config/reload — 热重载配置
+    // POST /api/config/reload — 热重载配置文件并报告不能热应用的启动期设置。
     if *method == Method::Post && segs.first() == Some(&"reload") {
+        let before = serde_json::to_value(config::get()).unwrap_or_default();
         match config::reload() {
-            Ok(()) => return ok(serde_json::json!({"ok": true, "message": "配置已重新载入"})),
+            Ok(()) => {
+                let after = serde_json::to_value(config::get()).unwrap_or_default();
+                let restart_required = sync_pending_restart(&after);
+                let reauth_required = config_path_value(&before, "admin.token")
+                    != config_path_value(&after, "admin.token");
+                let requires_restart = !restart_required.is_empty();
+                return ok(serde_json::json!({
+                    "ok": true,
+                    "applied": true,
+                    "restart_required": restart_required,
+                    "reauth_required": reauth_required,
+                    "message": if !requires_restart {
+                        "配置文件已重新载入并应用".to_string()
+                    } else {
+                        "配置文件已载入；部分设置仍需重启或通过专用管理页面操作".to_string()
+                    }
+                }));
+            }
             Err(e) => return err(500, &e),
         }
     }
@@ -857,30 +950,14 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
     let config_path = config::data_dir().join("config.yaml");
     match method {
         Method::Get => {
-            let data = match std::fs::read_to_string(&config_path) {
-                Ok(d) => d,
-                Err(_) => return err(404, "config.yaml not found"),
-            };
-            let mut cfg: serde_json::Value = match serde_yaml::from_str(&data) {
+            // 展示当前运行时快照，而不是未经应用的磁盘内容。
+            // GET /api/config/status 会单独提示文件是否存在待载入修改。
+            let mut cfg: serde_json::Value = match serde_json::to_value(config::get()) {
                 Ok(v) => v,
-                Err(e) => return err(500, &format!("parse config: {}", e)),
+                Err(e) => return err(500, &format!("serialize runtime config: {e}")),
             };
-            // 脱敏：隐藏 api_key
-            if let Some(obj) = cfg.as_object_mut() {
-                if let Some(key) = obj.get_mut("api_key")
-                    && let Some(s) = key.as_str()
-                    && s.len() > 8
-                {
-                    *key = serde_json::json!(format!("{}...{}", &s[..4], &s[s.len() - 4..]));
-                }
-                if let Some(v) = obj.get_mut("vision").and_then(|v| v.as_object_mut())
-                    && let Some(key) = v.get_mut("api_key")
-                    && let Some(s) = key.as_str()
-                    && s.len() > 8
-                {
-                    *key = serde_json::json!(format!("{}...{}", &s[..4], &s[s.len() - 4..]));
-                }
-            }
+            // 所有敏感配置使用统一遮罩；绝不把 search/embedding/admin 密钥直接返回前端。
+            redact_config_secrets(&mut cfg);
             ok(cfg)
         }
         Method::Put => {
@@ -889,46 +966,84 @@ fn handle_config_main(method: &Method, body: &[u8]) -> Response<std::io::Cursor<
                 Err(e) => return err(400, &format!("invalid json: {}", e)),
             };
             // 读取现有配置以保留未发送的字段
-            let existing = std::fs::read_to_string(&config_path).unwrap_or_default();
-            let existing_cfg: serde_json::Value =
-                serde_yaml::from_str(&existing).unwrap_or(serde_json::json!({}));
-
-            // 深合并：新配置中未发送的嵌套字段保留原值
-            let mut merged = deep_merge(&existing_cfg, &new_cfg);
-
-            // 脱敏字段还原：包含 "..." 的 api_key 保留原值
-            if let (Some(new_obj), Some(old_obj)) =
-                (merged.as_object_mut(), existing_cfg.as_object())
-            {
-                // api_key
-                if let Some(key) = new_obj.get("api_key").and_then(|v| v.as_str())
-                    && key.contains("...")
-                    && let Some(old_key) = old_obj.get("api_key")
-                {
-                    new_obj.insert("api_key".to_string(), old_key.clone());
+            let existing = match std::fs::read_to_string(&config_path) {
+                Ok(content) => content,
+                Err(error) => return err(500, &format!("读取现有配置失败（未写入）: {error}")),
+            };
+            let existing_cfg: config::Config = match serde_yaml::from_str(&existing) {
+                Ok(value) => value,
+                Err(error) => {
+                    return err(
+                        409,
+                        &format!("磁盘配置无法解析，拒绝覆盖以免丢失配置：{error}"),
+                    );
                 }
-                // vision.api_key
-                if let (Some(new_vis), Some(old_vis)) = (
-                    new_obj.get_mut("vision").and_then(|v| v.as_object_mut()),
-                    old_obj.get("vision").and_then(|v| v.as_object()),
-                ) && let Some(key) = new_vis.get("api_key").and_then(|v| v.as_str())
-                    && key.contains("...")
-                    && let Some(old_key) = old_vis.get("api_key")
-                {
-                    new_vis.insert("api_key".to_string(), old_key.clone());
-                }
+            };
+            let existing_cfg = match serde_json::to_value(existing_cfg) {
+                Ok(value) => value,
+                Err(error) => return err(500, &format!("规范化磁盘配置失败（未写入）：{error}")),
+            };
+
+            // UI reads the active runtime snapshot. If the file was edited externally
+            // since then, refuse a partial save rather than silently applying unrelated
+            // disk changes or overwriting them with stale UI values.
+            let active_cfg = serde_json::to_value(config::get()).unwrap_or_default();
+            if active_cfg != existing_cfg {
+                return err(
+                    409,
+                    "磁盘配置与运行时配置不一致；请先刷新状态，并选择“从文件重新载入”或恢复磁盘配置后再保存。",
+                );
             }
 
+            // 深合并：新配置中未发送的嵌套字段保留原值。
+            let mut merged = deep_merge(&existing_cfg, &new_cfg);
+
+            // 遮罩字段还原覆盖全部嵌套配置，未修改的密钥不会被写成遮罩字符串。
+            restore_config_secrets(&mut merged, &existing_cfg);
+
             // 类型化保存：反序列化成 Config 再原子落盘。
-            // 校验发生在写入之前，因此"改坏配置导致插件起不来"不可达。
-            let parsed: config::Config = match serde_json::from_value(merged) {
+            // 同时在写入前检查人设文件，避免保存后热重载失败。
+            let parsed: config::Config = match serde_json::from_value(merged.clone()) {
                 Ok(cfg) => cfg,
                 Err(e) => return err(400, &format!("配置校验失败（未写入）: {e}")),
             };
+            let prompt_path = config::data_dir().join("prompts").join(&parsed.prompts);
+            if !prompt_path.is_file() {
+                return err(
+                    400,
+                    &format!("人设文件不存在（未写入）: {}", prompt_path.display()),
+                );
+            }
+            if let Err(error) = config::validate_admin_token_transition(
+                &config::get().admin.token,
+                &parsed.admin.token,
+            ) {
+                return err(400, &format!("{error}；配置未写入"));
+            }
+
+            let reauth_required = config_path_value(&active_cfg, "admin.token")
+                != config_path_value(&merged, "admin.token");
+
             if let Err(e) = config::save(&parsed) {
                 return err(500, &format!("write config: {e}"));
             }
-            ok(serde_json::json!({"ok": true, "message": "配置已保存，点击「重新载入配置」生效"}))
+            if let Err(e) = config::reload() {
+                return err(500, &format!("配置已保存，但运行时应用失败：{e}"));
+            }
+            let active_after = serde_json::to_value(config::get()).unwrap_or_default();
+            let restart_required = sync_pending_restart(&active_after);
+            let requires_restart = !restart_required.is_empty();
+            ok(serde_json::json!({
+                "ok": true,
+                "applied": true,
+                "restart_required": restart_required,
+                "reauth_required": reauth_required,
+                "message": if !requires_restart {
+                    "配置已保存并应用到运行时".to_string()
+                } else {
+                    "可热更新项已立即应用；部分配置需要重启才能完全生效".to_string()
+                }
+            }))
         }
         _ => err(405, "method not allowed"),
     }
@@ -1220,6 +1335,69 @@ pub(crate) fn handle_memory_ops_log(
 /// - 对于其他情况：新值覆盖旧值
 ///
 /// 这样前端发送部分嵌套字段时，不会丢失未发送的字段
+const SECRET_MASK: &str = "••••••••";
+
+fn redact_config_secrets(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, child) in object.iter_mut() {
+                if (key == "api_key" || key == "token")
+                    && child.as_str().is_some_and(|secret| !secret.is_empty())
+                {
+                    *child = serde_json::Value::String(SECRET_MASK.to_string());
+                } else {
+                    redact_config_secrets(child);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                redact_config_secrets(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn restore_config_secrets(new_value: &mut serde_json::Value, old_value: &serde_json::Value) {
+    match new_value {
+        serde_json::Value::Object(new_object) => {
+            for (key, child) in new_object.iter_mut() {
+                let old_child = old_value.get(key);
+                // Only the exact sentinel means "unchanged". A legitimate new key may
+                // contain three dots and must not be silently replaced by the old secret.
+                let is_mask = child.as_str() == Some(SECRET_MASK);
+                if (key == "api_key" || key == "token") && is_mask {
+                    if let Some(old_secret) = old_child {
+                        *child = old_secret.clone();
+                    }
+                } else if let Some(old_child) = old_child {
+                    restore_config_secrets(child, old_child);
+                }
+            }
+        }
+        serde_json::Value::Array(new_items) => {
+            if let Some(old_items) = old_value.as_array() {
+                for (index, item) in new_items.iter_mut().enumerate() {
+                    if let Some(old_item) = old_items.get(index) {
+                        restore_config_secrets(item, old_item);
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Resolve a dotted path in a JSON value; used to report settings that require restart.
+fn config_path_value<'a>(
+    value: &'a serde_json::Value,
+    path: &str,
+) -> Option<&'a serde_json::Value> {
+    path.split('.')
+        .try_fold(value, |current, segment| current.get(segment))
+}
+
 fn deep_merge(base: &serde_json::Value, patch: &serde_json::Value) -> serde_json::Value {
     match (base, patch) {
         (serde_json::Value::Object(base_map), serde_json::Value::Object(patch_map)) => {
@@ -1299,10 +1477,7 @@ fn mind_now() -> serde_json::Value {
     })
 }
 
-pub(crate) fn handle_mind(
-    method: &Method,
-    segs: &[&str],
-) -> Response<std::io::Cursor<Vec<u8>>> {
+pub(crate) fn handle_mind(method: &Method, segs: &[&str]) -> Response<std::io::Cursor<Vec<u8>>> {
     let section = segs.first().copied().unwrap_or("");
     let rest = &segs[1.min(segs.len())..];
     match (method, section) {
@@ -1356,5 +1531,27 @@ pub(crate) fn handle_mind(
             None => err(404, "kernel.json 不存在——先在 data/self/kernel.json 创建"),
         },
         _ => err(404, "not found"),
+    }
+}
+
+#[cfg(test)]
+mod config_admin_tests {
+    use super::*;
+
+    #[test]
+    fn secret_restore_only_treats_the_exact_mask_as_unchanged() {
+        let old = serde_json::json!({
+            "api_key": "previous-secret",
+            "search": { "api_key": "previous-search-secret" }
+        });
+        let mut edited = serde_json::json!({
+            "api_key": SECRET_MASK,
+            "search": { "api_key": "new...search...secret" }
+        });
+
+        restore_config_secrets(&mut edited, &old);
+
+        assert_eq!(edited["api_key"], "previous-secret");
+        assert_eq!(edited["search"]["api_key"], "new...search...secret");
     }
 }

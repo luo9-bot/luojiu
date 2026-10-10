@@ -154,4 +154,3 @@ pub(crate) fn catch_up(group_id: u64) -> String {
     info!(group_id, count = lines.len(), "foraging: 深读完成");
     format!("你翻了翻群 {group_id} 的记录：\n{}", lines.join("\n"))
 }
-

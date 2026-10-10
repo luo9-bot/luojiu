@@ -77,11 +77,7 @@ impl StreamEvent {
         self
     }
 
-    pub(crate) fn with_recall(
-        mut self,
-        id: impl Into<String>,
-        source: impl Into<String>,
-    ) -> Self {
+    pub(crate) fn with_recall(mut self, id: impl Into<String>, source: impl Into<String>) -> Self {
         self.recall = Some(RecallMeta {
             id: id.into(),
             source: source.into(),

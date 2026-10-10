@@ -197,7 +197,10 @@ impl SharedState {
     }
 
     pub(crate) fn get_group_history_clone(&self, group_id: u64) -> Vec<(String, String)> {
-        self.group_history.get(&group_id).cloned().unwrap_or_default()
+        self.group_history
+            .get(&group_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// 遗忘用户的所有对话 (共享部分)

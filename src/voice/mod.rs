@@ -430,8 +430,11 @@ fn execute_plan_tool(name: &str, args: &serde_json::Value) -> Option<ToolOutcome
                     crate::schedule::SetStatusOutcome::UnknownId => ToolOutcome::Continue(format!(
                         "清单里没有编号 {id}。用 check_plan 看一下。"
                     )),
-                    crate::schedule::SetStatusOutcome::PersistenceFailed(error) =>
-                        ToolOutcome::Continue(format!("计划状态保存失败：{error}。本次没有完成标注。")),
+                    crate::schedule::SetStatusOutcome::PersistenceFailed(error) => {
+                        ToolOutcome::Continue(format!(
+                            "计划状态保存失败：{error}。本次没有完成标注。"
+                        ))
+                    }
                 },
             )
         }
@@ -727,16 +730,33 @@ fn style_block(group_id: u64, trigger: &str, user_id: u64) -> Option<String> {
 }
 
 fn group_history_block(group_id: u64, current_count: usize) -> Option<String> {
-    if group_id == 0 { return None; }
+    if group_id == 0 {
+        return None;
+    }
     let history = crate::read_shared_state(|s| s.get_group_history_clone(group_id));
     let previous_len = history.len().saturating_sub(current_count);
     let previous = &history[..previous_len];
-    if previous.is_empty() { return None; }
-    let lines: Vec<String> = previous.iter().rev().take(10).rev().map(|(role, content)| {
-        if role == "assistant" { format!("[你] {content}") } else { content.clone() }
-    }).collect();
+    if previous.is_empty() {
+        return None;
+    }
+    let lines: Vec<String> = previous
+        .iter()
+        .rev()
+        .take(10)
+        .rev()
+        .map(|(role, content)| {
+            if role == "assistant" {
+                format!("[你] {content}")
+            } else {
+                content.clone()
+            }
+        })
+        .collect();
     (!lines.is_empty()).then(|| {
-        format!("# 这群最近的聊天（较早现场，只用来接住语境）\n{}", lines.join("\n"))
+        format!(
+            "# 这群最近的聊天（较早现场，只用来接住语境）\n{}",
+            lines.join("\n")
+        )
     })
 }
 

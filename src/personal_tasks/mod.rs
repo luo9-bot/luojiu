@@ -275,7 +275,9 @@ pub(crate) fn extract_from_conversation(user_id: u64, group_id: u64, user_messag
         }
         let task_user = if waiting { user_id } else { 0 };
         let task_group = if waiting { group_id } else { 0 };
-        if let Some(task) = add_or_reinforce(title, task_user, task_group) && waiting {
+        if let Some(task) = add_or_reinforce(title, task_user, task_group)
+            && waiting
+        {
             mark_waiting_for_person(task.id);
         }
     }

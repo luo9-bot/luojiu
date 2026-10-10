@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - growth_lab
+
+# 只读权限，最小权限原则
+permissions:
+  contents: read
+
+# 同一分支连续推送时取消旧任务，节省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # 把前端产物也算进缓存 key，前端变了 Rust 会重编
+          shared-key: rust-ci
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build WebUI
+        run: npm run build
+        working-directory: frontend
+
+      - name: Run Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run Rust tests
+        run: cargo test --all-targets
+
+      # Run formatting last so a legacy formatting backlog does not hide
+      # compilation, Clippy, or test failures. Contributors can fix it with cargo fmt --all.
+      - name: Check Rust formatting
+        if: always()
+        run: cargo fmt --all -- --check

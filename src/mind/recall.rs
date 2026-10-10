@@ -139,12 +139,16 @@ pub(crate) fn topic_overlap(topic: &str, candidate: &str) -> usize {
 
 fn has_recall_topic(text: &str) -> bool {
     let compact: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    if matches!(compact.as_str(), "今天" | "昨天" | "明天" | "现在" | "最近" | "刚才") {
+    if matches!(
+        compact.as_str(),
+        "今天" | "昨天" | "明天" | "现在" | "最近" | "刚才"
+    ) {
         return false;
     }
     text.chars()
         .filter(|c| !c.is_whitespace() && !STOPWORDS.contains(*c) && !c.is_ascii_punctuation())
-        .count() >= 2
+        .count()
+        >= 2
 }
 
 fn should_emit(user_id: u64, group_id: u64, content: &str) -> bool {
@@ -153,10 +157,14 @@ fn should_emit(user_id: u64, group_id: u64, content: &str) -> bool {
     if is_completed(&key) {
         return false;
     }
-    let mut recent = RECENT_RECALLS.get_or_init(|| Mutex::new(HashMap::new()))
-        .lock().unwrap_or_else(|e| e.into_inner());
+    let mut recent = RECENT_RECALLS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     recent.retain(|_, ts| now.saturating_sub(*ts) < RECALL_COOLDOWN_SECS);
-    if recent.contains_key(&key) { return false; }
+    if recent.contains_key(&key) {
+        return false;
+    }
     recent.insert(key, now);
     true
 }
@@ -294,8 +302,12 @@ pub(crate) fn recall_for(text: &str, user_id: u64, group_id: u64) -> Vec<String>
 
     let mut filtered = Vec::with_capacity(MAX_RECALLS_PER_TURN);
     for line in out {
-        if filtered.len() >= MAX_RECALLS_PER_TURN { break; }
-        if should_emit(user_id, group_id, &line) { filtered.push(line); }
+        if filtered.len() >= MAX_RECALLS_PER_TURN {
+            break;
+        }
+        if should_emit(user_id, group_id, &line) {
+            filtered.push(line);
+        }
     }
     filtered
 }

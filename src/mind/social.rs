@@ -749,9 +749,15 @@ pub(crate) fn render_context_block(
             .is_some_and(|t| now.saturating_sub(t.at) <= IGNORED_WINDOW_SECS)
     {
         if state.ignored_streak >= 3 {
-            lines.push("你刚才几次开口暂时没人接（这是环境事实，不代表你不受欢迎，也不需要因此追着说）".to_string());
+            lines.push(
+                "你刚才几次开口暂时没人接（这是环境事实，不代表你不受欢迎，也不需要因此追着说）"
+                    .to_string(),
+            );
         } else {
-            lines.push("你刚说的话暂时没人接（这是环境事实，不代表你不受欢迎，也不需要因此追着说）".to_string());
+            lines.push(
+                "你刚说的话暂时没人接（这是环境事实，不代表你不受欢迎，也不需要因此追着说）"
+                    .to_string(),
+            );
         }
     }
 

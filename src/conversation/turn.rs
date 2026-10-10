@@ -90,12 +90,14 @@ impl TurnFocus {
         if self.is_called() || !self.followed_up_by.is_empty() {
             return false;
         }
-        let text_digests: Vec<&UtteranceDigest> =
-            self.digests.iter().filter(|digest| digest.has_text()).collect();
+        let text_digests: Vec<&UtteranceDigest> = self
+            .digests
+            .iter()
+            .filter(|digest| digest.has_text())
+            .collect();
         !text_digests.is_empty()
             && text_digests.iter().all(|digest| {
-                !digest.at_targets.is_empty()
-                    && digest.at_targets.iter().all(|target| *target != 0)
+                !digest.at_targets.is_empty() && digest.at_targets.iter().all(|target| *target != 0)
             })
             && self.addresses_others()
     }

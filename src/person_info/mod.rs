@@ -51,10 +51,10 @@ pub(crate) fn update_qq_identity(
         if let Some(name) = nickname {
             profile.qq_nickname = name.to_string();
         }
-        if group_id > 0 {
-            if let Some(name) = card.or(nickname) {
-                profile.group_nicknames.insert(group_id, name.to_string());
-            }
+        if group_id > 0
+            && let Some(name) = card.or(nickname)
+        {
+            profile.group_nicknames.insert(group_id, name.to_string());
         }
     });
 }
@@ -68,10 +68,10 @@ pub(crate) fn get_display_name(user_id: u64, group_id: u64) -> Option<String> {
     if !profile.person_name.is_empty() {
         return Some(profile.person_name);
     }
-    if group_id > 0 {
-        if let Some(name) = profile.group_nicknames.get(&group_id) {
-            return Some(name.clone());
-        }
+    if group_id > 0
+        && let Some(name) = profile.group_nicknames.get(&group_id)
+    {
+        return Some(name.clone());
     }
     if !profile.qq_nickname.is_empty() {
         return Some(profile.qq_nickname.clone());
@@ -86,14 +86,15 @@ pub(crate) fn get_identity_label(user_id: u64, group_id: u64) -> Option<String> 
     }
 
     let profile = load_profile(user_id);
-    let cognitive_name = crate::mind::persons::display_name_or_address(user_id)
-        .or_else(|| profile.as_ref().and_then(|p| {
+    let cognitive_name = crate::mind::persons::display_name_or_address(user_id).or_else(|| {
+        profile.as_ref().and_then(|p| {
             if p.person_name.is_empty() {
                 None
             } else {
                 Some(p.person_name.clone())
             }
-        }));
+        })
+    });
     let qq_nickname = profile.as_ref().and_then(|p| {
         if p.qq_nickname.is_empty() {
             None
@@ -102,7 +103,9 @@ pub(crate) fn get_identity_label(user_id: u64, group_id: u64) -> Option<String> 
         }
     });
     let group_name = if group_id > 0 {
-        profile.as_ref().and_then(|p| p.group_nicknames.get(&group_id).cloned())
+        profile
+            .as_ref()
+            .and_then(|p| p.group_nicknames.get(&group_id).cloned())
     } else {
         None
     };

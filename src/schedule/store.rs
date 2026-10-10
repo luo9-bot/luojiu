@@ -344,7 +344,9 @@ pub(crate) fn set_status(
     let wanted = item_id.trim().to_ascii_lowercase();
     for timeframe in Timeframe::ALL {
         let mut plan = load(timeframe);
-        if plan.period != current_period(timeframe) { continue; }
+        if plan.period != current_period(timeframe) {
+            continue;
+        }
         let Some(index) = plan.items.iter().position(|item| item.id == wanted) else {
             continue;
         };
@@ -353,7 +355,15 @@ pub(crate) fn set_status(
             let item = &mut plan.items[index];
             if let Some(done) = completed {
                 item.completed = done;
-                item.completed_at = if done { if item.completed_at == 0 { now } else { item.completed_at } } else { 0 };
+                item.completed_at = if done {
+                    if item.completed_at == 0 {
+                        now
+                    } else {
+                        item.completed_at
+                    }
+                } else {
+                    0
+                };
                 if done && !note.trim().is_empty() {
                     item.completion_note = note.trim().to_string();
                 }

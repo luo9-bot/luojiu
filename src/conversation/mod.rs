@@ -202,7 +202,8 @@ pub(crate) fn handle_group_msg(
     );
 
     // ── 训练数据留档：人类说话语料（防注入放行的才进库） ──
-    let archive_name = crate::person_info::get_identity_label(user_id, group_id).unwrap_or_default();
+    let archive_name =
+        crate::person_info::get_identity_label(user_id, group_id).unwrap_or_default();
     crate::mind::archive::record_message(
         group_id,
         user_id,

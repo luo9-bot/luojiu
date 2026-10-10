@@ -41,10 +41,29 @@ pub(crate) fn error_message() -> String {
     CONFIG_ERROR.read_recover().clone()
 }
 
+/// Validate a live admin-token change without mutating runtime state.
+pub(crate) fn validate_admin_token_transition(
+    current_token: &str,
+    next_token: &str,
+) -> Result<(), String> {
+    if !current_token.is_empty() && next_token.trim().is_empty() {
+        Err("管理 Token 不能为空；如需停用管理后台，请通过受控的停服流程操作".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 /// 重新载入配置文件（热重载，无需重启插件）
 pub(crate) fn reload() -> Result<(), String> {
     let config_path = data_dir().join("config.yaml");
-    let content = fs::read_to_string(&config_path).map_err(|e| format!("读取配置失败: {}", e))?;
+    let content = match fs::read_to_string(&config_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let message = format!("读取配置失败：{error}");
+            *CONFIG_ERROR.write_recover() = message.clone();
+            return Err(message);
+        }
+    };
     let config: Config = match serde_yaml::from_str(&content) {
         Ok(c) => c,
         Err(e) => {
@@ -54,16 +73,32 @@ pub(crate) fn reload() -> Result<(), String> {
         }
     };
 
-    // 解析成功，清除错误标记
-    *CONFIG_ERROR.write_recover() = String::new();
-
-    // 更新提示词
-    let prompt_path = data_dir().join("prompts").join(&config.prompts);
-    if prompt_path.exists() {
-        let prompt_content = fs::read_to_string(&prompt_path).unwrap_or_default();
-        *PROMPT.write_recover() = prompt_content;
+    // The running WebUI authenticates against this token on every request.
+    // Clearing it through hot reload would silently turn authentication off.
+    let current_token = CONFIG
+        .read_recover()
+        .as_ref()
+        .map(|current| current.admin.token.clone())
+        .unwrap_or_default();
+    if let Err(message) = validate_admin_token_transition(&current_token, &config.admin.token) {
+        *CONFIG_ERROR.write_recover() = message.clone();
+        return Err(message);
     }
 
+    // 先读取提示词，再一次性提交运行时快照。不能在文件缺失时保留旧 Prompt，
+    // 否则 WebUI 会显示新配置，而生成路径仍然使用旧人设。
+    let prompt_path = data_dir().join("prompts").join(&config.prompts);
+    let prompt_content = match fs::read_to_string(&prompt_path) {
+        Ok(content) => content,
+        Err(error) => {
+            let message = format!("读取人设文件失败（{}）：{error}", prompt_path.display());
+            *CONFIG_ERROR.write_recover() = message.clone();
+            return Err(message);
+        }
+    };
+
+    *CONFIG_ERROR.write_recover() = String::new();
+    *PROMPT.write_recover() = prompt_content;
     *CONFIG.write_recover() = Some(config);
     debug!("config: hot-reloaded successfully");
     Ok(())
@@ -104,6 +139,14 @@ pub(crate) fn save(config: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
     use crate::config::init::DEFAULT_CONFIG_YAML;
+
+    #[test]
+    fn live_reload_cannot_disable_admin_authentication() {
+        assert!(validate_admin_token_transition("old-token", "").is_err());
+        assert!(validate_admin_token_transition("old-token", "   ").is_err());
+        assert!(validate_admin_token_transition("old-token", "new-token").is_ok());
+        assert!(validate_admin_token_transition("", "").is_ok());
+    }
 
     /// 默认配置的参考实例：默认值的唯一真源就是模板本身
     fn reference_config() -> Config {
@@ -183,6 +226,54 @@ mod tests {
         assert!(
             unresolved.is_empty(),
             "ConfigView.vue 指向了不存在的配置路径（网页旋钮会失效）：{unresolved:?}"
+        );
+    }
+
+    /// 后端 Config 的每个可配置叶子都必须在 WebUI 中有编辑入口。
+    /// 复杂结构（例如 quota.segments）允许由一个 JSON 编辑字段整体承载。
+    #[test]
+    fn every_config_leaf_is_exposed_in_admin_ui() {
+        let config_value: serde_yaml::Value =
+            serde_yaml::to_value(reference_config()).expect("配置必须可序列化");
+        let view = include_str!("../../frontend/src/views/ConfigView.vue");
+        let pattern = regex::Regex::new(r"key:\s*'([A-Za-z0-9_.]+)'").expect("正则必须合法");
+        let ui_paths: Vec<String> = pattern
+            .captures_iter(view)
+            .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+            .collect();
+
+        fn collect_leaf_paths(value: &serde_yaml::Value, prefix: &str, out: &mut Vec<String>) {
+            match value {
+                serde_yaml::Value::Mapping(map) if !map.is_empty() => {
+                    for (key, child) in map {
+                        if let Some(key) = key.as_str() {
+                            let path = if prefix.is_empty() {
+                                key.to_string()
+                            } else {
+                                format!("{prefix}.{key}")
+                            };
+                            collect_leaf_paths(child, &path, out);
+                        }
+                    }
+                }
+                _ => out.push(prefix.to_string()),
+            }
+        }
+
+        let mut leaves = Vec::new();
+        collect_leaf_paths(&config_value, "", &mut leaves);
+        let missing: Vec<String> = leaves
+            .into_iter()
+            .filter(|path| {
+                !ui_paths
+                    .iter()
+                    .any(|ui_path| path == ui_path || path.starts_with(&format!("{ui_path}.")))
+            })
+            .collect();
+
+        assert!(
+            missing.is_empty(),
+            "后端存在未在 WebUI 暴露的配置字段：{missing:?}"
         );
     }
 

@@ -8,6 +8,22 @@
       </div>
       <button class="btn btn-ghost btn-sm" @click="load">刷新</button>
     </div>
+    <div v-if="pendingRestart.length" class="config-error-banner">
+      <span class="error-icon">!</span>
+      <div class="error-body">
+        <strong>部分配置尚未完全生效</strong>
+        <span v-for="item in pendingRestart" :key="item.field">{{ item.field }}：{{ item.reason }}</span>
+      </div>
+    </div>
+    <div v-if="pendingFileChanges" class="config-error-banner">
+      <span class="error-icon">!</span>
+      <div class="error-body">
+        <strong>检测到磁盘配置尚未应用</strong>
+        <span>当前页面展示的是运行时生效值。若你在外部编辑了 config.yaml，请从文件重新载入。</span>
+      </div>
+      <button class="btn btn-primary btn-sm" @click="reloadConfig">从文件重新载入</button>
+    </div>
+    <div v-if="applyNotice" class="apply-notice">{{ applyNotice }}</div>
     <div class="config-layout">
       <div class="config-nav card">
         <div class="nav-section" v-for="sec in sections" :key="sec.id">
@@ -34,7 +50,7 @@
                   <span class="toggle-dot" :class="{ on: getVal(f) }"></span>
                   <span>{{ getVal(f) ? '是' : '否' }}</span>
                 </template>
-                <template v-else-if="f.type === 'array'">
+                <template v-else-if="f.type === 'array' || f.type === 'readonly-array'">
                   <span class="array-chips">
                     <span v-for="(item, i) in (getVal(f) || [])" :key="i" class="chip-sm">{{ item }}</span>
                     <span v-if="!(getVal(f) || []).length" class="text-muted">空</span>
@@ -53,8 +69,8 @@
 
         <div class="card notice-card">
           <svg viewBox="0 0 20 20" fill="none" width="16" height="16"><path d="M10 2l7 3v5c0 4-3 7-7 8-4-1-7-4-7-8V5l7-3z" stroke="currentColor" stroke-width="1.5"/><path d="M9 9h2v5H9zM9 6h2v2H9z" fill="currentColor"/></svg>
-          <span>修改配置后点击「保存」再「重新载入配置」即可生效，无需重启。</span>
-          <button class="btn btn-primary btn-sm" @click="reloadConfig" style="margin-left:auto;flex-shrink:0">重新载入配置</button>
+          <span>保存后会立即应用可热更新项；需要重启的配置会单独列出。</span>
+          <button class="btn btn-ghost btn-sm" @click="reloadConfig" style="margin-left:auto;flex-shrink:0">从文件重新载入</button>
         </div>
       </div>
     </div>
@@ -65,15 +81,18 @@
         <div class="edit-fields">
           <div v-for="f in currentSection.fields" :key="f.key" class="edit-field">
             <label>{{ f.label }}</label>
-            <input v-if="f.type === 'string' || f.type === 'number'"
+            <input v-if="f.type === 'string' || f.type === 'number' || f.type === 'text'"
                    :type="f.type === 'number' ? 'number' : 'text'"
                    v-model="editForm[f.key]" class="glass-input" />
+            <textarea v-else-if="f.type === 'json'"
+                      v-model="editForm[f.key]" class="glass-input json-input" spellcheck="false"></textarea>
             <select v-else-if="f.type === 'bool'" v-model="editForm[f.key]" class="glass-select">
               <option :value="true">是</option>
               <option :value="false">否</option>
             </select>
             <input v-else-if="f.type === 'array'"
                    v-model="editForm[f.key]" class="glass-input" placeholder="逗号分隔多个值" />
+            <div v-else-if="f.type === 'readonly-array'" class="readonly-hint">该字段是启动期导入项；运行时请使用专用黑名单管理页面。</div>
           </div>
         </div>
         <div class="modal-actions">
@@ -87,10 +106,13 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
-import { api } from '../api.js'
+import { api, setToken } from '../api.js'
 
 const config = ref(null)
 const configError = ref('')
+const pendingFileChanges = ref(false)
+const pendingRestart = ref([])
+const applyNotice = ref('')
 const activeSection = ref('general')
 const showEdit = ref(false)
 const editForm = reactive({})
@@ -107,7 +129,7 @@ const sections = [
       { key: 'darling_qq', label: 'Darling QQ', type: 'number' },
       { key: 'prompts', label: '人设文件', type: 'string' },
       { key: 'whitelist', label: '白名单', type: 'array' },
-      { key: 'blacklist', label: '黑名单', type: 'array' },
+      { key: 'blacklist', label: '启动时导入的黑名单（请用系统→黑名单管理修改）', type: 'readonly-array' },
       { key: 'auto_start_users', label: '自动启动用户', type: 'array' },
       { key: 'auto_start_groups', label: '自动启动群', type: 'array' },
     ]
@@ -132,12 +154,21 @@ const sections = [
       { key: 'conversation.max_typing_delay_ms', label: '最大打字延迟(ms)', type: 'number' },
       { key: 'conversation.reply_follow_up_secs', label: '跟进回复间隔(秒)', type: 'number' },
       { key: 'conversation.action_descriptions', label: '允许动作描述', type: 'bool' },
+      { key: 'conversation.voice_max_rounds', label: '表达工具最大轮数', type: 'number' },
+      { key: 'conversation.silence_cooldown_secs', label: '沉默后重评间隔(秒)', type: 'number' },
+      { key: 'conversation.interruption_enabled', label: '允许概率式中断', type: 'bool' },
+      { key: 'conversation.filter_shell_level', label: '滤壳等级(off/standard/strict)', type: 'string' },
     ]
   },
   { id: 'memory', label: '记忆', color: 'var(--accent)',
     fields: [
       { key: 'memory.auto_summarize_threshold', label: '自动摘要阈值', type: 'number' },
       { key: 'memory.working_memory_expire_hours', label: '工作记忆过期(小时)', type: 'number' },
+      { key: 'memory.forgetting_enabled', label: '启用自然遗忘', type: 'bool' },
+      { key: 'memory.forgetting_half_life_days', label: '遗忘半衰期(天)', type: 'number' },
+      { key: 'memory.forgetting_time_weight', label: '时间衰减权重', type: 'number' },
+      { key: 'memory.forgetting_similarity_weight', label: '相似度权重', type: 'number' },
+      { key: 'memory.forgetting_reinforcement_gain', label: '检索强化增益', type: 'number' },
     ]
   },
   { id: 'emotion', label: '情绪', color: 'var(--warning)',
@@ -159,6 +190,14 @@ const sections = [
       { key: 'vision.base_url', label: 'API 地址', type: 'string' },
       { key: 'vision.model', label: '模型', type: 'string' },
       { key: 'vision.max_tokens', label: '最大 Tokens', type: 'number' },
+      { key: 'vision.memory_images', label: '图片描述写入记忆', type: 'bool' },
+    ]
+  },
+  { id: 'search', label: '联网搜索', color: 'var(--info)',
+    fields: [
+      { key: 'search.enabled', label: '启用搜索工具', type: 'bool' },
+      { key: 'search.api_url', label: '搜索代理地址', type: 'string' },
+      { key: 'search.api_key', label: '搜索 API 密钥', type: 'string' },
     ]
   },
   { id: 'embedding', label: '向量嵌入', color: 'var(--success)',
@@ -192,6 +231,7 @@ const sections = [
     fields: [
       { key: 'quota.enabled', label: '启用', type: 'bool' },
       { key: 'quota.segment_minutes', label: '配额段长度(分)', type: 'number' },
+      { key: 'quota.segments', label: '分时段回复上限(JSON)', type: 'json' },
     ]
   },
   { id: 'humanity', label: '人性化', color: 'var(--accent)',
@@ -200,24 +240,33 @@ const sections = [
       { key: 'humanity.battery_capacity', label: '电池容量', type: 'number' },
       { key: 'humanity.battery_drain_rate', label: '消耗速率', type: 'number' },
       { key: 'humanity.battery_recharge_rate', label: '恢复速率', type: 'number' },
+      { key: 'humanity.burnout_threshold', label: '倦怠阈值', type: 'number' },
+      { key: 'humanity.burnout_recovery_mult', label: '倦怠恢复倍率', type: 'number' },
       { key: 'humanity.speak_gate', label: '开口门限(越低越爱插话)', type: 'number' },
       { key: 'humanity.cognitive_biases_enabled', label: '认知偏差', type: 'bool' },
       { key: 'humanity.cognitive_biases.confirmation_bias', label: '确认偏误', type: 'number' },
+      { key: 'humanity.cognitive_biases.mood_congruence', label: '情绪一致性偏差', type: 'number' },
+      { key: 'humanity.cognitive_biases.anchoring_strength', label: '锚定效应强度', type: 'number' },
+      { key: 'humanity.cognitive_biases.availability_heuristic', label: '可得性启发', type: 'number' },
       { key: 'humanity.attention_enabled', label: '注意力模型', type: 'bool' },
       { key: 'humanity.attention_drift_enabled', label: '注意力漂移', type: 'bool' },
       { key: 'humanity.attention_drift.drift_level', label: '漂移档位', type: 'text' },
       { key: 'humanity.attention_drift.anchor_policy', label: '回钩策略', type: 'text' },
       { key: 'humanity.attention_drift.reaction_style', label: '短反应风格', type: 'text' },
       { key: 'humanity.response_timing_enabled', label: '变速回复', type: 'bool' },
+      { key: 'humanity.base_typing_speed', label: '基础打字速度', type: 'number' },
       { key: 'humanity.unpredictability_enabled', label: '不可预测性', type: 'bool' },
       { key: 'humanity.whim_probability', label: '心血来潮概率', type: 'number' },
       { key: 'humanity.opinion_drift_rate', label: '观点漂移率', type: 'number' },
+      { key: 'humanity.association_jump_probability', label: '联想跳跃概率', type: 'number' },
       { key: 'humanity.forgetting_rate', label: '自然遗忘率', type: 'number' },
       { key: 'humanity.circadian_enabled', label: '昼夜节律', type: 'bool' },
       { key: 'humanity.circadian_amplitude', label: '节律振幅', type: 'number' },
+      { key: 'humanity.circadian_phase_offset', label: '节律相位偏移', type: 'number' },
       { key: 'humanity.wish_enabled', label: '愿望系统', type: 'bool' },
       { key: 'humanity.foraging_enabled', label: '信息觅食', type: 'bool' },
       { key: 'humanity.flashback_probability', label: '闪回概率', type: 'number' },
+      { key: 'humanity.flashback_impact_threshold', label: '闪回情绪影响阈值', type: 'number' },
     ]
   },
   { id: 'sticker', label: '表情包', color: 'var(--accent)',
@@ -225,6 +274,18 @@ const sections = [
       { key: 'sticker.steal_emoji', label: '自动收集表情', type: 'bool' },
       { key: 'sticker.max_reg_num', label: '最大注册数', type: 'number' },
       { key: 'sticker.do_replace', label: '自动替换', type: 'bool' },
+    ]
+  },
+  { id: 'messages', label: '系统提示消息', color: 'var(--text-2)',
+    fields: [
+      { key: 'messages.start.success', label: '启动成功提示', type: 'string' },
+      { key: 'messages.start.redo', label: '重复启动提示', type: 'string' },
+      { key: 'messages.stop.success', label: '停止成功提示', type: 'string' },
+      { key: 'messages.stop.redo', label: '重复停止提示', type: 'string' },
+      { key: 'messages.forget.success', label: '遗忘成功提示', type: 'string' },
+      { key: 'messages.forget.fail', label: '遗忘失败提示', type: 'string' },
+      { key: 'messages.restart.success', label: '重启成功提示', type: 'string' },
+      { key: 'messages.restart.redo', label: '重复重启提示', type: 'string' },
     ]
   },
   { id: 'log', label: '日志', color: 'var(--text-2)',
@@ -263,33 +324,43 @@ function openEdit() {
     delete editForm[key]
   }
   for (const f of currentSection.value.fields) {
+    if (f.type === 'readonly-array') continue
     const v = getVal(f)
     if (v != null) {
-      editForm[f.key] = f.type === 'array' ? (Array.isArray(v) ? v.join(', ') : String(v)) : v
+      editForm[f.key] = f.type === 'array' ? (Array.isArray(v) ? v.join(', ') : String(v))
+        : f.type === 'json' ? JSON.stringify(v, null, 2) : v
     }
   }
 }
 
 async function load() {
-  try { config.value = await api('/api/config') } catch {}
+  configError.value = ''
+  try { config.value = await api('/api/config') } catch (e) { configError.value = e.message }
   try {
     const s = await api('/api/config/status')
-    configError.value = s.ok ? '' : (s.error || '未知错误')
-  } catch { configError.value = '' }
+    if (!configError.value) configError.value = s.ok ? '' : (s.error || '未知错误')
+    pendingFileChanges.value = Boolean(s.pending_file_changes)
+    pendingRestart.value = Array.isArray(s.restart_required) ? s.restart_required : []
+  } catch { pendingFileChanges.value = false }
 }
 
 async function saveConfig() {
   const patch = {}
   for (const f of currentSection.value.fields) {
-    if (editForm[f.key] === '' || editForm[f.key] === undefined) continue
+    if (f.type === 'readonly-array') continue
+    if (editForm[f.key] === undefined) continue
+    if (f.type === 'number' && editForm[f.key] === '') continue
     const parts = f.key.split('.')
     let current = patch
     for (let i = 0; i < parts.length; i++) {
       if (i === parts.length - 1) {
         if (f.type === 'number') current[parts[i]] = Number(editForm[f.key])
         else if (f.type === 'bool') current[parts[i]] = editForm[f.key] === true || editForm[f.key] === 'true'
-        else if (f.type === 'array') current[parts[i]] = String(editForm[f.key]).split(',').map(s => s.trim()).filter(Boolean)
-        else current[parts[i]] = editForm[f.key]
+        else if (f.type === 'array') current[parts[i]] = String(editForm[f.key] ?? '').split(',').map(s => s.trim()).filter(Boolean)
+        else if (f.type === 'json') {
+          try { current[parts[i]] = JSON.parse(editForm[f.key]) }
+          catch { alert('JSON 格式错误：' + f.label); return }
+        } else current[parts[i]] = editForm[f.key]
       } else {
         current[parts[i]] = current[parts[i]] || {}
         current = current[parts[i]]
@@ -297,19 +368,33 @@ async function saveConfig() {
     }
   }
   try {
-    await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) })
+    const result = await api('/api/config', { method: 'PUT', body: JSON.stringify(patch) })
+    if (result.reauth_required && Object.prototype.hasOwnProperty.call(editForm, 'admin.token')) {
+      setToken(String(editForm['admin.token'] ?? ''))
+    }
     showEdit.value = false
-    load()
+    const restart = result.restart_required || []
+    applyNotice.value = restart.length
+      ? '已保存并热应用可即时生效的设置。以下项目需重启插件/管理服务：' + restart.map(x => x.field + '（' + x.reason + '）').join('；')
+      : '已保存并应用到运行时。'
+    await load()
   } catch (e) {
-    alert('保存失败: ' + e.message)
+    alert('保存或应用失败: ' + e.message)
   }
 }
 
 async function reloadConfig() {
   try {
     const r = await api('/api/config/reload', { method: 'POST' })
-    alert(r.message || '配置已重新载入')
-    load()
+    if (r.reauth_required) {
+      window.dispatchEvent(new CustomEvent('auth-expired'))
+      return
+    }
+    const restart = r.restart_required || []
+    applyNotice.value = restart.length
+      ? (r.message || '配置文件已重新载入') + '；需重启/专用操作的项目：' + restart.map(x => x.field + '（' + x.reason + '）').join('；')
+      : (r.message || '配置文件已重新载入并应用')
+    await load()
   } catch (e) { alert('重载失败: ' + e.message) }
 }
 
@@ -318,6 +403,9 @@ onMounted(() => { load(); window.addEventListener('refresh-all', load) })
 
 <style scoped>
 .config-layout { display: flex; gap: 20px; align-items: flex-start; }
+.apply-notice { padding: 11px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-2); background: var(--surface); font-size: 12px; line-height: 1.6; }
+.json-input { min-height: 130px; resize: vertical; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre; }
+.readonly-hint { color: var(--text-2); font-size: 12px; line-height: 1.6; padding: 8px 0; }
 .nav-section { margin-bottom: 2px; }
 .nav-item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: var(--radius-xs); font-size: 12px; font-weight: 500; cursor: pointer; transition: var(--transition); color: var(--text-2); }
 .nav-item:hover { background: var(--surface-hover); color: var(--text); }

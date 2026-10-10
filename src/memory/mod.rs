@@ -62,7 +62,9 @@ fn search_memories_inner(
     // 全局记忆
     let global = store::load_user_memory(user_id);
     for (i, entry) in global.entries.iter().enumerate() {
-        if stable_only && !recall_eligible(entry) { continue; }
+        if stable_only && !recall_eligible(entry) {
+            continue;
+        }
         let id = format!("global_{}_{}", user_id, i);
         meta.insert(
             id.clone(),
@@ -80,7 +82,9 @@ fn search_memories_inner(
     if current_group_id > 0 {
         let group_user = store::load_group_user_memory(current_group_id, user_id);
         for (i, entry) in group_user.entries.iter().enumerate() {
-            if stable_only && !recall_eligible(entry) { continue; }
+            if stable_only && !recall_eligible(entry) {
+                continue;
+            }
             let id = format!("group_{}_{}_{}", current_group_id, user_id, i);
             meta.insert(
                 id.clone(),
@@ -192,13 +196,21 @@ fn search_memories_inner(
 
 fn recall_eligible(entry: &MemoryEntry) -> bool {
     if entry.importance == Importance::Permanent
-        || entry.emotional_impact.is_some_and(|impact| impact.abs() >= 6.0)
+        || entry
+            .emotional_impact
+            .is_some_and(|impact| impact.abs() >= 6.0)
     {
         return true;
     }
-    if entry.importance != Importance::Important { return false; }
-    let transient = ["喝了", "吃了", "买了", "看了", "去了", "做了", "遇到", "刷到", "听了", "玩了", "睡了"];
-    !transient.iter().any(|marker| entry.content.contains(marker))
+    if entry.importance != Importance::Important {
+        return false;
+    }
+    let transient = [
+        "喝了", "吃了", "买了", "看了", "去了", "做了", "遇到", "刷到", "听了", "玩了", "睡了",
+    ];
+    !transient
+        .iter()
+        .any(|marker| entry.content.contains(marker))
 }
 
 /// 检索即强化：命中条目 access_count+1、刷新 last_accessed 并回写
@@ -264,8 +276,17 @@ mod tests {
 
     #[test]
     fn automatic_recall_skips_one_time_drinks() {
-        assert!(!recall_eligible(&entry("用户喝了可乐", Importance::Important)));
-        assert!(recall_eligible(&entry("用户喜欢喝可乐", Importance::Important)));
-        assert!(recall_eligible(&entry("用户要求永久记住这件事", Importance::Permanent)));
+        assert!(!recall_eligible(&entry(
+            "用户喝了可乐",
+            Importance::Important
+        )));
+        assert!(recall_eligible(&entry(
+            "用户喜欢喝可乐",
+            Importance::Important
+        )));
+        assert!(recall_eligible(&entry(
+            "用户要求永久记住这件事",
+            Importance::Permanent
+        )));
     }
 }

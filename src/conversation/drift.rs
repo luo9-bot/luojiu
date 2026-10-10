@@ -113,7 +113,11 @@ mod tests {
     #[test]
     fn every_level_has_a_non_empty_rule() {
         for table in [DRIFT_RULES, ANCHOR_RULES, REACTION_RULES] {
-            assert!(table.iter().all(|(name, rule)| !name.is_empty() && !rule.is_empty()));
+            assert!(
+                table
+                    .iter()
+                    .all(|(name, rule)| !name.is_empty() && !rule.is_empty())
+            );
         }
     }
 }
