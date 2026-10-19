@@ -6,14 +6,17 @@
         <div class="header-actions">
           <input v-model="addId" placeholder="输入 QQ 号添加" class="glass-input" style="width:160px" />
           <button class="btn btn-primary btn-sm" @click="addUser" :disabled="!addId.trim()">＋ 添加</button>
+          <button class="btn btn-ghost btn-sm" @click="applyConfig">应用配置默认名单</button>
           <button class="btn btn-ghost btn-sm" @click="load">↻ 刷新</button>
         </div>
       </div>
       <div v-if="!list.length" class="empty">暂无黑名单用户</div>
       <div v-else class="chip-list">
-        <div v-for="(u, i) in list" :key="i" class="chip">
+        <div v-for="u in list" :key="u" class="chip">
           <span class="mono">{{ u }}</span>
-          <button class="chip-close" @click="remove(u)">✕</button>
+          <button class="chip-close" @click="remove(u)" :disabled="deleting.has(u)">
+            {{ deleting.has(u) ? '…' : '✕' }}
+          </button>
         </div>
       </div>
     </div>
@@ -26,6 +29,7 @@ import { api } from '../api.js'
 
 const list = ref([])
 const addId = ref('')
+const deleting = ref(new Set())
 
 async function load() {
   try {
@@ -33,12 +37,28 @@ async function load() {
     list.value = d.blocked || []
   } catch {}
 }
-async function remove(id) { await api('/api/blocklist/' + id, { method: 'DELETE' }); load() }
+async function remove(id) {
+  if (deleting.value.has(id)) return
+  deleting.value = new Set(deleting.value).add(id)
+  try {
+    await api('/api/blocklist/' + id, { method: 'DELETE' })
+    await load()
+  } finally {
+    const next = new Set(deleting.value)
+    next.delete(id)
+    deleting.value = next
+  }
+}
 async function addUser() {
-  if (!addId.value.trim()) return
-  await api('/api/blocklist', { method: 'POST', body: JSON.stringify({ user_id: Number(addId.value.trim()) }) })
+  const value = addId.value.trim()
+  if (!/^\d+$/.test(value) || Number(value) <= 0) return
+  await api('/api/blocklist', { method: 'POST', body: JSON.stringify({ user_id: Number(value) }) })
   addId.value = ''
   load()
+}
+async function applyConfig() {
+  await api('/api/blocklist/apply-config', { method: 'POST', body: '{}' })
+  await load()
 }
 
 onMounted(() => { load(); window.addEventListener('refresh-all', load) })

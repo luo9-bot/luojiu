@@ -658,22 +658,30 @@ pub(crate) fn handle_blocklist(
     match method {
         Method::Get => {
             let runtime = crate::get_blacklist();
-            // 配置里的 blacklist 是启动时并入运行时的静态名单，仍然分别展示，
-            // 便于定位"这条为什么被拉黑"。
             let from_config = config::get().blacklist.clone();
-            let mut all = runtime.clone();
-            for uid in &from_config {
-                if !all.contains(uid) {
-                    all.push(*uid);
-                }
-            }
             ok(serde_json::json!({
-                "blocked": all,
+                // 只返回当前真正生效的运行时名单。把配置名单再次拼回这里会
+                // 让 DELETE 成功后前端刷新仍看见同一个账号。
+                "blocked": runtime.clone(),
                 "from_runtime": runtime,
                 "from_config": from_config,
             }))
         }
         Method::Post => {
+            if segs.first() == Some(&"apply-config") {
+                let configured = config::get().blacklist;
+                let current = crate::get_blacklist();
+                backup::before_modify("blocklist");
+                for uid in current {
+                    if !configured.contains(&uid) {
+                        crate::set_blacklisted(crate::db::Actor::Admin, uid, false);
+                    }
+                }
+                for uid in &configured {
+                    crate::set_blacklisted(crate::db::Actor::Admin, *uid, true);
+                }
+                return ok(serde_json::json!({"ok": true, "blocked": configured}));
+            }
             let body_val: serde_json::Value = match parse_json(body) {
                 Ok(v) => v,
                 Err(e) => return err(400, &e),
@@ -684,6 +692,10 @@ pub(crate) fn handle_blocklist(
             };
             backup::before_modify("blocklist");
             crate::set_blacklisted(crate::db::Actor::Admin, uid, true);
+            if let Err(error) = config::update_blacklist_user(uid, true) {
+                warn!(%error, user_id = uid, "admin: 黑名单配置同步失败");
+                return err(500, &format!("黑名单已生效，但配置保存失败: {error}"));
+            }
             ok(serde_json::json!({"ok": true}))
         }
         Method::Delete => {
@@ -693,6 +705,10 @@ pub(crate) fn handle_blocklist(
             };
             backup::before_modify("blocklist");
             crate::set_blacklisted(crate::db::Actor::Admin, uid, false);
+            if let Err(error) = config::update_blacklist_user(uid, false) {
+                warn!(%error, user_id = uid, "admin: 黑名单配置同步失败");
+                return err(500, &format!("黑名单已移除，但配置保存失败: {error}"));
+            }
             ok(serde_json::json!({"ok": true}))
         }
         _ => err(405, "method not allowed"),

@@ -135,6 +135,30 @@ pub(crate) fn save(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+/// 将 WebUI 对黑名单的增删同步回配置文件。
+///
+/// 配置里的 `blacklist` 是启动时导入的默认名单；如果只改运行时状态，
+/// 下次重载/重启时它会再次被导入，造成“删除后又出现”的假象。
+pub(crate) fn update_blacklist_user(user_id: u64, blocked: bool) -> Result<bool, String> {
+    let mut current = get();
+    let was_present = current.blacklist.contains(&user_id);
+    if blocked {
+        if !was_present {
+            current.blacklist.push(user_id);
+        }
+    } else {
+        current.blacklist.retain(|&id| id != user_id);
+    }
+    if was_present == blocked {
+        return Ok(false);
+    }
+    current.blacklist.sort_unstable();
+    current.blacklist.dedup();
+    save(&current)?;
+    reload()?;
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

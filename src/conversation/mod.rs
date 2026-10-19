@@ -288,13 +288,8 @@ pub(crate) fn handle_private_msg(
             return;
         }
 
-        // 黑名单检查：如果用户在黑名单中，拒绝
-        if !cfg.blacklist.is_empty() && cfg.blacklist.contains(&user_id) {
-            debug!(user_id, "blocked: user in blacklist");
-            return;
-        }
-
-        // 运行时黑名单检查 (命令添加的)
+        // 黑名单统一由进程级门禁状态判断。配置名单在启动/热重载时导入，
+        // 不能在这里再次直接读取，否则 WebUI 删除后仍会被配置值拦截。
         if gate_read(|g| g.is_blacklisted(user_id)) {
             debug!(user_id, "blocked private message from blacklisted user");
             return;

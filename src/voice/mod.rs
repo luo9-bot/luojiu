@@ -602,6 +602,11 @@ fn build_system(scene_line: &str, identity: &str) -> String {
         parts.push(scene_line.to_string());
     }
     parts.push(format!("当前时间：{}", crate::util::now_formatted_cst()));
+    // 放在系统提示最后，确保旧版本自定义 prompt 与场景注入也不能覆盖它。
+    parts.push(
+        "# 接话边界\n回复必须直接对当前聊天对象说话。不要把内部的场景观察、对话总结、气氛判断、重复检测或回复质量评价说出口；不要用旁观者口吻评论这段对话或群里的人。只针对眼前具体内容自然接一句，没话就沉默。"
+            .to_string(),
+    );
     parts.join("\n\n")
 }
 

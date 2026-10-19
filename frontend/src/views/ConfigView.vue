@@ -129,7 +129,7 @@ const sections = [
       { key: 'darling_qq', label: 'Darling QQ', type: 'number' },
       { key: 'prompts', label: '人设文件', type: 'string' },
       { key: 'whitelist', label: '白名单', type: 'array' },
-      { key: 'blacklist', label: '启动时导入的黑名单（请用系统→黑名单管理修改）', type: 'readonly-array' },
+      { key: 'blacklist', label: '默认黑名单（逗号分隔 QQ 号）', type: 'array' },
       { key: 'auto_start_users', label: '自动启动用户', type: 'array' },
       { key: 'auto_start_groups', label: '自动启动群', type: 'array' },
     ]
