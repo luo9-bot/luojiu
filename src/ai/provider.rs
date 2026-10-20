@@ -180,7 +180,7 @@ pub(crate) fn rendered_core_rules() -> String {
     vars.insert("omit_subject_rule", omit_rule);
     vars.insert("punctuation_rule", punct_rule);
     crate::prompt::PromptRenderer::render_simple(
-        crate::prompt::PromptManager::get().raw("core_rules"),
+        &crate::prompt::PromptManager::get().raw("core_rules"),
         &vars,
     )
 }

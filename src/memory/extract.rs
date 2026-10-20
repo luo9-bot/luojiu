@@ -123,7 +123,7 @@ pub(crate) fn ai_extract(
     let content = context_parts.join("\n");
 
     let result = crate::ai::analyze(
-        crate::prompt::PromptManager::get().raw("memory_extract"),
+        &crate::prompt::PromptManager::get().raw("memory_extract"),
         &content,
     );
     match result {

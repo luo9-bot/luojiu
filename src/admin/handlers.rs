@@ -901,6 +901,98 @@ pub(crate) fn handle_anti_injection(
     }
 }
 
+// ── Prompt 管理 ───────────────────────────────────────────────
+
+pub(crate) fn handle_prompts(
+    method: &Method,
+    segs: &[&str],
+    body: &[u8],
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    if *method == Method::Get && segs.is_empty() {
+        let persona_name = config::get().prompts;
+        let persona_path = config::data_dir().join("prompts").join(&persona_name);
+        let persona = std::fs::read_to_string(&persona_path).unwrap_or_default();
+        let builtin: Vec<serde_json::Value> = crate::prompt::PromptManager::list_builtin()
+            .into_iter()
+            .map(|item| {
+                serde_json::json!({
+                    "name": item.name,
+                    "builtin": item.builtin,
+                    "effective": item.effective,
+                    "customized": item.customized,
+                })
+            })
+            .collect();
+        return ok(serde_json::json!({
+            "builtin": builtin,
+            "persona": {
+                "name": persona_name,
+                "content": persona,
+                "builtin": config::default_prompt_content(),
+            }
+        }));
+    }
+
+    let Some(name) = segs.first().copied() else {
+        return err(404, "prompt not found");
+    };
+    if name.contains('/') || name.contains('\\') || name.contains("..") {
+        return err(400, "invalid prompt name");
+    }
+
+    if *method == Method::Post && segs.get(1) == Some(&"reset") {
+        if name == config::get().prompts {
+            let path = config::data_dir().join("prompts").join(name);
+            if let Err(error) = crate::util::atomic_write(&path, config::default_prompt_content()) {
+                return err(500, &format!("写入人设失败：{error}"));
+            }
+            if let Err(error) = config::reload() {
+                return err(500, &format!("人设已写入但热加载失败：{error}"));
+            }
+            if let Err(error) = crate::prompt::PromptManager::get().reload() {
+                return err(500, &format!("Prompt 管理器热加载失败：{error}"));
+            }
+            return ok(serde_json::json!({"ok": true, "message": "已恢复内置人设并热加载"}));
+        }
+        return match crate::prompt::PromptManager::reset_to_builtin(name) {
+            Ok(()) => ok(serde_json::json!({"ok": true, "message": "已恢复内置 Prompt 并热加载"})),
+            Err(error) => err(404, &error),
+        };
+    }
+
+    if *method == Method::Put && segs.len() == 1 {
+        let value: serde_json::Value = match parse_json(body) {
+            Ok(value) => value,
+            Err(error) => return err(400, &error),
+        };
+        let Some(content) = value.get("content").and_then(|value| value.as_str()) else {
+            return err(400, "content required");
+        };
+        if content.len() > 512 * 1024 {
+            return err(400, "prompt 内容不能超过 512KB");
+        }
+        if name == config::get().prompts {
+            let path = config::data_dir().join("prompts").join(name);
+            if let Err(error) = crate::util::atomic_write(&path, content) {
+                return err(500, &format!("写入人设失败：{error}"));
+            }
+            if let Err(error) = config::reload() {
+                return err(500, &format!("人设已写入但热加载失败：{error}"));
+            }
+            if let Err(error) = crate::prompt::PromptManager::get().reload() {
+                return err(500, &format!("Prompt 管理器热加载失败：{error}"));
+            }
+            return ok(serde_json::json!({"ok": true, "message": "人设已保存并热加载"}));
+        }
+        return match crate::prompt::PromptManager::save_custom(name, content) {
+            Ok(()) => ok(serde_json::json!({"ok": true, "message": "Prompt 已保存并热加载"})),
+            Err(error) => err(400, &error),
+        };
+    }
+
+    err(405, "method not allowed")
+}
+
 // ── 配置管理 ──────────────────────────────────────────────────
 
 pub(crate) fn handle_config(

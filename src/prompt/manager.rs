@@ -1,26 +1,55 @@
 //! Prompt 管理器：从 .prompt 文件加载模板，支持 {placeholder} 替换
 
 use std::collections::HashMap;
-use std::path::Path;
-use std::sync::OnceLock;
+use std::path::{Path, PathBuf};
+use std::sync::{OnceLock, RwLock};
 use tracing::{debug, warn};
+
+use crate::util::{RwLockReadExt, RwLockWriteExt};
 
 /// 全局 PromptManager 单例
 static PROMPTS: OnceLock<PromptManager> = OnceLock::new();
 
 pub(crate) struct PromptManager {
-    templates: HashMap<String, String>,
+    templates: RwLock<HashMap<String, String>>,
+    data_dir: PathBuf,
 }
 
 impl PromptManager {
     /// 初始化：扫描 prompts/ 目录，加载所有 .prompt 和 .txt 文件
     pub(crate) fn init(data_dir: &Path) {
-        let prompts_dir = data_dir.join("prompts");
-        std::fs::create_dir_all(&prompts_dir).ok();
+        let manager = PROMPTS.get_or_init(|| PromptManager {
+            templates: RwLock::new(HashMap::new()),
+            data_dir: data_dir.to_path_buf(),
+        });
+        if let Err(error) = manager.reload() {
+            warn!(%error, "prompt: 初始化失败");
+        }
+    }
 
+    /// 获取全局实例
+    ///
+    /// 未初始化时惰性建一个空管理器，而不是 panic：prompt 缺失应当表现为
+    /// "这一层没有内容"，不该让整条回复路径消失。
+    pub(crate) fn get() -> &'static PromptManager {
+        PROMPTS.get_or_init(|| {
+            tracing::warn!("prompt: 未初始化即被访问，使用空管理器（prompt 内容为空）");
+            PromptManager {
+                templates: RwLock::new(HashMap::new()),
+                data_dir: PathBuf::new(),
+            }
+        })
+    }
+
+    /// 从磁盘重新加载所有模板，并让新内容立即用于后续请求。
+    pub(crate) fn reload(&self) -> Result<(), String> {
+        if self.data_dir.as_os_str().is_empty() {
+            return Err("prompt manager 尚未初始化".to_string());
+        }
+        let prompts_dir = self.data_dir.join("prompts");
+        std::fs::create_dir_all(&prompts_dir)
+            .map_err(|error| format!("创建 prompt 目录失败：{error}"))?;
         let mut templates = HashMap::new();
-
-        // 扫描目录中的 .prompt 和 .txt 文件
         if let Ok(entries) = std::fs::read_dir(&prompts_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
@@ -38,26 +67,11 @@ impl PromptManager {
                 }
             }
         }
-
-        // 内置默认 prompt：如果文件不存在则从编译时嵌入的内容生成
         Self::ensure_defaults(&prompts_dir, &mut templates);
-
         let count = templates.len();
-        let _ = PROMPTS.set(PromptManager { templates });
-        debug!(count, "prompt: manager initialized");
-    }
-
-    /// 获取全局实例
-    ///
-    /// 未初始化时惰性建一个空管理器，而不是 panic：prompt 缺失应当表现为
-    /// "这一层没有内容"，不该让整条回复路径消失。
-    pub(crate) fn get() -> &'static PromptManager {
-        PROMPTS.get_or_init(|| {
-            tracing::warn!("prompt: 未初始化即被访问，使用空管理器（prompt 内容为空）");
-            PromptManager {
-                templates: HashMap::new(),
-            }
-        })
+        *self.templates.write_recover() = templates;
+        debug!(count, "prompt: reloaded");
+        Ok(())
     }
 
     /// 获取 prompt 模板并替换占位符
@@ -65,7 +79,8 @@ impl PromptManager {
     /// 占位符格式：`{key}`，从 `vars` 映射中查找替换。
     /// 无匹配的占位符保持原样。
     pub(crate) fn render(&self, name: &str, vars: &HashMap<&str, &str>) -> String {
-        let template = match self.templates.get(name) {
+        let templates = self.templates.read_recover();
+        let template = match templates.get(name) {
             Some(t) => t.as_str(),
             None => {
                 warn!(name, "prompt: template not found");
@@ -80,14 +95,65 @@ impl PromptManager {
     }
 
     /// 获取原始模板（不替换占位符）
-    pub(crate) fn raw(&self, name: &str) -> &str {
+    pub(crate) fn raw(&self, name: &str) -> String {
         self.templates
+            .read_recover()
             .get(name)
-            .map(|s| s.as_str())
+            .cloned()
             .unwrap_or_else(|| {
                 warn!(name, "prompt: template not found for raw()");
-                ""
+                String::new()
             })
+    }
+
+    /// 列出 WebUI 可管理的内置模板。
+    pub(crate) fn list_builtin() -> Vec<PromptInfo> {
+        let manager = Self::get();
+        let templates = manager.templates.read_recover();
+        defaults()
+            .into_iter()
+            .map(|(name, builtin, _)| {
+                let path = manager
+                    .data_dir
+                    .join("prompts")
+                    .join(format!("{name}.prompt"));
+                let disk = std::fs::read_to_string(path).ok();
+                PromptInfo {
+                    name: name.to_string(),
+                    builtin: builtin.to_string(),
+                    effective: templates.get(name).cloned().unwrap_or_default(),
+                    customized: disk.as_deref().is_some_and(|value| value != builtin),
+                }
+            })
+            .collect()
+    }
+
+    /// 保存用户自定义模板，并立即热加载。
+    pub(crate) fn save_custom(name: &str, content: &str) -> Result<(), String> {
+        if !defaults().iter().any(|(entry, _, _)| *entry == name) {
+            return Err(format!("未知的内置 prompt：{name}"));
+        }
+        if content.len() > 512 * 1024 {
+            return Err("prompt 内容不能超过 512KB".to_string());
+        }
+        let manager = Self::get();
+        let path = manager
+            .data_dir
+            .join("prompts")
+            .join(format!("{name}.prompt"));
+        crate::util::atomic_write(&path, content)
+            .map_err(|error| format!("写入 prompt 失败：{error}"))?;
+        manager.reload()
+    }
+
+    /// 恢复为当前插件内置模板，并立即热加载。
+    pub(crate) fn reset_to_builtin(name: &str) -> Result<(), String> {
+        let builtin = defaults()
+            .into_iter()
+            .find(|(entry, _, _)| *entry == name)
+            .map(|(_, content, _)| content)
+            .ok_or_else(|| format!("未知的内置 prompt：{name}"))?;
+        Self::save_custom(name, builtin)
     }
 
     /// 内置默认 prompt：文件不存在时写入；存在时判断能否随版本升级刷新
@@ -134,6 +200,13 @@ impl PromptManager {
             }
         }
     }
+}
+
+pub(crate) struct PromptInfo {
+    pub(crate) name: String,
+    pub(crate) builtin: String,
+    pub(crate) effective: String,
+    pub(crate) customized: bool,
 }
 
 /// 数据目录里已有的模板该怎么处理

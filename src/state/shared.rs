@@ -148,7 +148,7 @@ impl SharedState {
                 let prompt_clone = final_prompt.clone();
                 std::thread::spawn(move || {
                     let compressed = crate::ai::analyze(
-                        crate::prompt::PromptManager::get().raw("history_attention"),
+                        &crate::prompt::PromptManager::get().raw("history_attention"),
                         &prompt_clone,
                     );
                     if let Ok(summary) = compressed

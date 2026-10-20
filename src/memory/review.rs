@@ -26,7 +26,7 @@ pub(crate) fn auto_summarize(user_id: u64, group_id: u64, history: &[(String, St
 
     // 尝试 AI 摘要
     let result = crate::ai::analyze(
-        crate::prompt::PromptManager::get().raw("memory_summarize"),
+        &crate::prompt::PromptManager::get().raw("memory_summarize"),
         &conversation_text,
     );
     match result {
@@ -143,7 +143,7 @@ pub(crate) fn ai_review_all() {
         let context = context_parts.join("\n\n");
 
         let result = crate::ai::analyze_with_tools(
-            crate::prompt::PromptManager::get().raw("memory_review"),
+            &crate::prompt::PromptManager::get().raw("memory_review"),
             &context,
             &[crate::ai::memory_review_tool()],
         );

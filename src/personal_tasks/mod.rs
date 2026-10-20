@@ -247,7 +247,7 @@ fn mark_waiting_for_person(task_id: u64) {
 pub(crate) fn extract_from_conversation(user_id: u64, group_id: u64, user_message: &str) {
     let context = format!("# 对方刚说\n{user_message}");
     let result = crate::ai::analyze_with_tools(
-        crate::prompt::PromptManager::get().raw("task_progress"),
+        &crate::prompt::PromptManager::get().raw("task_progress"),
         &context,
         &[crate::ai::task_progress_tool()],
     );

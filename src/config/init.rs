@@ -40,6 +40,10 @@ pub(super) const DEFAULT_PROMPT_TXT: &str = r#"# 人设
 - 适度幽默，但不会过度开玩笑
 "#;
 
+pub(crate) fn default_prompt_content() -> &'static str {
+    DEFAULT_PROMPT_TXT
+}
+
 // ── 初始化 ──────────────────────────────────────────────────────
 
 /// 这个构建用哪个数据目录

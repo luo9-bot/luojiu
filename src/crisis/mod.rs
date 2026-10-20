@@ -94,7 +94,7 @@ pub(crate) fn detect_crisis(message: &str) -> CrisisLevel {
 /// 返回 `(等级, 置信度)`，置信度 ≥ 0.6 才触发干预。
 pub(crate) fn detect_crisis_ai(message: &str) -> Option<CrisisLevel> {
     let prompt = crate::prompt::PromptManager::get().raw("crisis_ai_detect");
-    let result = crate::ai::analyze(prompt, message);
+    let result = crate::ai::analyze(&prompt, message);
     match result {
         Ok(reply) => {
             let json_str = crate::ai::extract_json(&reply).unwrap_or_else(|| reply.clone());
