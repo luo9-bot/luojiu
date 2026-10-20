@@ -7,6 +7,23 @@ use tracing::{debug, warn};
 
 use crate::util::{RwLockReadExt, RwLockWriteExt};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DiffKind {
+    Same,
+    Added,
+    Removed,
+}
+
+pub(crate) struct DiffLine {
+    pub(crate) kind: DiffKind,
+    pub(crate) text: String,
+}
+
+pub(crate) struct MergePreview {
+    pub(crate) content: String,
+    pub(crate) conflicts: usize,
+}
+
 /// 全局 PromptManager 单例
 static PROMPTS: OnceLock<PromptManager> = OnceLock::new();
 
@@ -209,6 +226,131 @@ pub(crate) struct PromptInfo {
     pub(crate) customized: bool,
 }
 
+/// 生成逐行差异。`left` 是当前生效内容，`right` 是插件内置内容。
+pub(crate) fn diff_lines(left: &str, right: &str) -> Vec<DiffLine> {
+    let a: Vec<&str> = left.lines().collect();
+    let b: Vec<&str> = right.lines().collect();
+    if a.len() > 2000 || b.len() > 2000 {
+        return vec![DiffLine {
+            kind: DiffKind::Same,
+            text: "…内容过长，逐行 Diff 已跳过…".to_string(),
+        }];
+    }
+    let lcs = lcs_table(&a, &b);
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() || j < b.len() {
+        if i < a.len() && j < b.len() && a[i] == b[j] {
+            out.push(DiffLine {
+                kind: DiffKind::Same,
+                text: a[i].to_string(),
+            });
+            i += 1;
+            j += 1;
+        } else if j < b.len() && (i == a.len() || lcs[i][j + 1] >= lcs[i + 1][j]) {
+            out.push(DiffLine {
+                kind: DiffKind::Added,
+                text: b[j].to_string(),
+            });
+            j += 1;
+        } else if i < a.len() {
+            out.push(DiffLine {
+                kind: DiffKind::Removed,
+                text: a[i].to_string(),
+            });
+            i += 1;
+        }
+        if out.len() >= 4000 {
+            out.push(DiffLine {
+                kind: DiffKind::Same,
+                text: "…差异过多，已截断…".to_string(),
+            });
+            break;
+        }
+    }
+    out
+}
+
+/// 生成合并草稿：保留本地修改；同一位置双方都有修改时写入冲突标记。
+pub(crate) fn merge_keep_local(local: &str, builtin: &str) -> MergePreview {
+    if local == builtin {
+        return MergePreview {
+            content: local.to_string(),
+            conflicts: 0,
+        };
+    }
+    let a: Vec<&str> = local.lines().collect();
+    let b: Vec<&str> = builtin.lines().collect();
+    if a.len() > 2000 || b.len() > 2000 {
+        return MergePreview {
+            content: format!(
+                "<<<<<<< 本地修改\n{local}\n=======\n{builtin}\n>>>>>>> 插件内置新版\n"
+            ),
+            conflicts: 1,
+        };
+    }
+    let lcs = lcs_table(&a, &b);
+    let mut anchors = Vec::new();
+    let (mut i, mut j) = (0, 0);
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            anchors.push((i, j));
+            i += 1;
+            j += 1;
+        } else if lcs[i][j + 1] >= lcs[i + 1][j] {
+            j += 1;
+        } else {
+            i += 1;
+        }
+    }
+    let mut merged = Vec::new();
+    let mut conflicts = 0;
+    let (mut ai, mut bi) = (0, 0);
+    for (anchor_i, anchor_j) in anchors
+        .into_iter()
+        .chain(std::iter::once((a.len(), b.len())))
+    {
+        let local_part = &a[ai..anchor_i];
+        let builtin_part = &b[bi..anchor_j];
+        if !local_part.is_empty() && !builtin_part.is_empty() {
+            conflicts += 1;
+            merged.push("<<<<<<< 本地修改".to_string());
+            merged.extend(local_part.iter().map(|line| (*line).to_string()));
+            merged.push("=======".to_string());
+            merged.extend(builtin_part.iter().map(|line| (*line).to_string()));
+            merged.push(">>>>>>> 插件内置新版".to_string());
+        } else if !local_part.is_empty() {
+            merged.extend(local_part.iter().map(|line| (*line).to_string()));
+        } else {
+            merged.extend(builtin_part.iter().map(|line| (*line).to_string()));
+        }
+        if anchor_i < a.len() {
+            merged.push(a[anchor_i].to_string());
+        }
+        ai = anchor_i + usize::from(anchor_i < a.len());
+        bi = anchor_j + usize::from(anchor_j < b.len());
+    }
+    let mut content = merged.join("\n");
+    if local.ends_with('\n') || builtin.ends_with('\n') {
+        content.push('\n');
+    }
+    MergePreview { content, conflicts }
+}
+
+fn lcs_table(a: &[&str], b: &[&str]) -> Vec<Vec<usize>> {
+    let mut table = vec![vec![0; b.len() + 1]; a.len() + 1];
+    for i in (0..a.len()).rev() {
+        for j in (0..b.len()).rev() {
+            table[i][j] = if a[i] == b[j] {
+                table[i + 1][j + 1] + 1
+            } else {
+                table[i + 1][j].max(table[i][j + 1])
+            };
+        }
+    }
+    table
+}
+
 /// 数据目录里已有的模板该怎么处理
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DefaultDecision {
@@ -236,6 +378,39 @@ fn decide_default(on_disk: &str, current: &str, previous: &[&str]) -> DefaultDec
         DefaultDecision::Upgrade
     } else {
         DefaultDecision::KeepUser
+    }
+}
+
+#[cfg(test)]
+mod merge_tests {
+    use super::*;
+
+    #[test]
+    fn diff_marks_local_removal_and_builtin_addition() {
+        let diff = diff_lines("a\nlocal\nc", "a\nnew\nc");
+        assert!(
+            diff.iter()
+                .any(|line| line.kind == DiffKind::Removed && line.text == "local")
+        );
+        assert!(
+            diff.iter()
+                .any(|line| line.kind == DiffKind::Added && line.text == "new")
+        );
+    }
+
+    #[test]
+    fn merge_keeps_disjoint_local_and_builtin_lines() {
+        let merged = merge_keep_local("a\nlocal\nc", "a\nnew\nc");
+        assert_eq!(merged.conflicts, 1);
+        assert!(merged.content.contains("local"));
+        assert!(merged.content.contains("new"));
+    }
+
+    #[test]
+    fn merge_without_conflict_applies_new_builtin_lines() {
+        let merged = merge_keep_local("a\nc", "a\nb\nc");
+        assert_eq!(merged.conflicts, 0);
+        assert_eq!(merged.content, "a\nb\nc");
     }
 }
 

@@ -3,5 +3,5 @@
 mod manager;
 pub(crate) mod renderer;
 
-pub(crate) use manager::PromptManager;
+pub(crate) use manager::{DiffKind, PromptManager, diff_lines, merge_keep_local};
 pub(crate) use renderer::PromptRenderer;

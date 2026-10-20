@@ -915,20 +915,46 @@ pub(crate) fn handle_prompts(
         let builtin: Vec<serde_json::Value> = crate::prompt::PromptManager::list_builtin()
             .into_iter()
             .map(|item| {
+                let diff: Vec<serde_json::Value> =
+                    crate::prompt::diff_lines(&item.effective, &item.builtin)
+                        .into_iter()
+                        .map(|line| {
+                            let kind = match line.kind {
+                                crate::prompt::DiffKind::Same => "same",
+                                crate::prompt::DiffKind::Added => "added",
+                                crate::prompt::DiffKind::Removed => "removed",
+                            };
+                            serde_json::json!({"kind": kind, "text": line.text})
+                        })
+                        .collect();
                 serde_json::json!({
                     "name": item.name,
                     "builtin": item.builtin,
                     "effective": item.effective,
                     "customized": item.customized,
+                    "diff": diff,
                 })
             })
             .collect();
+        let diff: Vec<serde_json::Value> =
+            crate::prompt::diff_lines(&persona, config::default_prompt_content())
+                .into_iter()
+                .map(|line| {
+                    let kind = match line.kind {
+                        crate::prompt::DiffKind::Same => "same",
+                        crate::prompt::DiffKind::Added => "added",
+                        crate::prompt::DiffKind::Removed => "removed",
+                    };
+                    serde_json::json!({"kind": kind, "text": line.text})
+                })
+                .collect();
         return ok(serde_json::json!({
             "builtin": builtin,
             "persona": {
                 "name": persona_name,
                 "content": persona,
                 "builtin": config::default_prompt_content(),
+                "diff": diff,
             }
         }));
     }
@@ -938,6 +964,84 @@ pub(crate) fn handle_prompts(
     };
     if name.contains('/') || name.contains('\\') || name.contains("..") {
         return err(400, "invalid prompt name");
+    }
+
+    if *method == Method::Get && segs.get(1) == Some(&"diff") {
+        let (local, builtin) = if name == config::get().prompts {
+            let path = config::data_dir().join("prompts").join(name);
+            (
+                std::fs::read_to_string(path).unwrap_or_default(),
+                config::default_prompt_content().to_string(),
+            )
+        } else if let Some(item) = crate::prompt::PromptManager::list_builtin()
+            .into_iter()
+            .find(|item| item.name == name)
+        {
+            (item.effective, item.builtin)
+        } else {
+            return err(404, "prompt not found");
+        };
+        let lines: Vec<serde_json::Value> = crate::prompt::diff_lines(&local, &builtin)
+            .into_iter()
+            .map(|line| {
+                let kind = match line.kind {
+                    crate::prompt::DiffKind::Same => "same",
+                    crate::prompt::DiffKind::Added => "added",
+                    crate::prompt::DiffKind::Removed => "removed",
+                };
+                serde_json::json!({"kind": kind, "text": line.text})
+            })
+            .collect();
+        return ok(serde_json::json!({"name": name, "lines": lines}));
+    }
+
+    if *method == Method::Post && segs.get(1) == Some(&"merge") {
+        let (local, builtin) = if name == config::get().prompts {
+            let path = config::data_dir().join("prompts").join(name);
+            (
+                std::fs::read_to_string(path).unwrap_or_default(),
+                config::default_prompt_content().to_string(),
+            )
+        } else if let Some(item) = crate::prompt::PromptManager::list_builtin()
+            .into_iter()
+            .find(|item| item.name == name)
+        {
+            (item.effective, item.builtin)
+        } else {
+            return err(404, "prompt not found");
+        };
+        let preview = crate::prompt::merge_keep_local(&local, &builtin);
+        if preview.content.len() > 512 * 1024 {
+            return err(400, "合并后的 prompt 超过 512KB");
+        }
+        if preview.conflicts == 0 {
+            if name == config::get().prompts {
+                let path = config::data_dir().join("prompts").join(name);
+                if let Err(error) = crate::util::atomic_write(&path, &preview.content) {
+                    return err(500, &format!("写入人设失败：{error}"));
+                }
+                if let Err(error) = config::reload() {
+                    return err(500, &format!("人设已写入但热加载失败：{error}"));
+                }
+                if let Err(error) = crate::prompt::PromptManager::get().reload() {
+                    return err(500, &format!("Prompt 管理器热加载失败：{error}"));
+                }
+            } else if let Err(error) =
+                crate::prompt::PromptManager::save_custom(name, &preview.content)
+            {
+                return err(500, &error);
+            }
+        }
+        return ok(serde_json::json!({
+            "ok": true,
+            "conflicts": preview.conflicts,
+            "content": preview.content,
+            "message": if preview.conflicts == 0 {
+                "已合并新版并热加载"
+            } else {
+                "已生成合并草稿，存在冲突标记，请检查编辑器后再保存"
+            }
+        }));
     }
 
     if *method == Method::Post && segs.get(1) == Some(&"reset") {

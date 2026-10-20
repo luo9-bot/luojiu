@@ -23,8 +23,20 @@
 
         <div class="editor-actions">
           <button class="btn btn-primary" @click="save">保存并热加载</button>
+          <button v-if="isCustomized" class="btn btn-merge" @click="merge">合并新版，保留本地修改</button>
           <button class="btn btn-ghost" @click="reset">恢复内置版本</button>
+          <button class="btn btn-ghost" @click="showDiff = !showDiff">{{ showDiff ? '隐藏逐行 Diff' : '查看逐行 Diff' }}</button>
           <button class="btn btn-ghost" @click="showBuiltin = !showBuiltin">{{ showBuiltin ? '隐藏内置版本' : '查看内置版本' }}</button>
+        </div>
+
+        <div v-if="showDiff" class="diff-block">
+          <div class="builtin-title">当前生效版本 → 插件内置版本</div>
+          <div class="diff-list">
+            <div v-for="(line, i) in diff" :key="i" class="diff-line" :class="line.kind">
+              <span class="diff-mark">{{ line.kind === 'added' ? '+' : line.kind === 'removed' ? '-' : ' ' }}</span>
+              <span>{{ line.text || ' ' }}</span>
+            </div>
+          </div>
         </div>
 
         <div v-if="showBuiltin" class="builtin-block">
@@ -48,6 +60,7 @@ const selected = ref('__persona')
 const draft = ref('')
 const builtin = ref('')
 const showBuiltin = ref(false)
+const showDiff = ref(false)
 const notice = ref('')
 
 const current = computed(() => selected.value === '__persona'
@@ -56,11 +69,13 @@ const current = computed(() => selected.value === '__persona'
 const isCustomized = computed(() => selected.value === '__persona'
   ? persona.value.content !== persona.value.builtin
   : Boolean(current.value.customized))
+const diff = computed(() => current.value.diff || [])
 
 function selectPrompt() {
   draft.value = selected.value === '__persona' ? persona.value.content : current.value.effective
   builtin.value = selected.value === '__persona' ? persona.value.builtin : current.value.builtin
   showBuiltin.value = false
+  showDiff.value = false
   notice.value = ''
 }
 
@@ -98,6 +113,19 @@ async function reset() {
   } catch (e) { notice.value = e.message || '恢复失败' }
 }
 
+async function merge() {
+  if (!confirm('将新版新增内容合并到当前 Prompt；存在冲突时会生成冲突标记，是否继续？')) return
+  try {
+    const name = selected.value === '__persona' ? persona.value.name : selected.value
+    const data = await api('/api/prompts/' + encodeURIComponent(name) + '/merge', { method: 'POST' })
+    if (data.content) draft.value = data.content
+    notice.value = data.conflicts
+      ? `已生成合并草稿，发现 ${data.conflicts} 处冲突；请检查后点击“保存并热加载”`
+      : (data.message || '已合并新版并热加载')
+    if (!data.conflicts) await load()
+  } catch (e) { notice.value = e.message || '合并失败' }
+}
+
 onMounted(() => { load(); window.addEventListener('refresh-all', load) })
 </script>
 
@@ -114,9 +142,16 @@ onMounted(() => { load(); window.addEventListener('refresh-all', load) })
 .editor-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
 .btn { padding:8px 14px; border:none; border-radius:var(--radius-xs); font-size:13px; cursor:pointer; }
 .btn-primary { background:var(--primary); color:#fff; }
+.btn-merge { background:var(--warning); color:#1b1300; }
 .btn-ghost { background:var(--surface); color:var(--text); border:1px solid var(--border); }
 .btn-sm { padding:4px 10px; font-size:12px; }
 .builtin-block { margin-top:16px; }
+.diff-block { margin-top:16px; }
+.diff-list { max-height:320px; overflow:auto; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface-hover); font:12px/1.6 monospace; }
+.diff-line { display:flex; gap:8px; padding:2px 10px; white-space:pre-wrap; }
+.diff-line.added { background:color-mix(in srgb, var(--success) 14%, transparent); color:var(--success); }
+.diff-line.removed { background:color-mix(in srgb, var(--danger) 14%, transparent); color:var(--danger); }
+.diff-mark { width:10px; flex:0 0 10px; color:var(--text-3); }
 .builtin-title { color:var(--text-2); font-size:12px; margin-bottom:6px; }
 pre { max-height:280px; overflow:auto; padding:12px; border-radius:var(--radius-sm); background:var(--surface-hover); color:var(--text-2); white-space:pre-wrap; font:12px/1.6 monospace; }
 .notice { margin-top:12px; color:var(--success); font-size:12px; }
