@@ -29,12 +29,16 @@ admin_qq: 123456789
 darling_qq: 0
 
 # ── 识图功能 (可选) ─────────────────────────────────────────────
-# 配置后 bot 能识别群聊中的图片/表情包，理解其内容后再决定是否回复
-# api_key 为空则禁用识图，图片消息会被忽略
+# use_main_api=true 复用上面的主 API 地址和密钥；选择支持图片的模型。
+# 默认关闭，兼容旧配置。独立服务可设置 use_main_api=false 并填入 api_key。
 vision:
-  api_key: ""                                    # 识图 API key，留空 = 禁用
-  base_url: "https://ark.cn-beijing.volces.com/api/v3"  # API 地址
-  model: "doubao-seed-1-8-251228"                # 识图模型
+  use_main_api: false                            # 改为 true 即可用主 DeepSeek API 识图
+  api_format: "auto"                             # auto / chat_completions / responses
+  api_key: ""                                    # 独立密钥；不复用主 API 且留空时禁用
+  base_url: "https://api.deepseek.com"            # 独立 API 地址
+  model: "deepseek-flash"                        # DeepSeek 当前支持图片的模型
+  detail: "auto"                                 # auto / low / high / original
+  max_image_bytes: 10485760                       # 10 MiB，内联单图最多 32 MiB
   max_tokens: 256
 
   # 多模态统一记忆：把图片描述沉淀为文本记忆，与文字记忆进同一向量空间

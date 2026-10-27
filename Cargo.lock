@@ -676,10 +676,9 @@ dependencies = [
 
 [[package]]
 name = "luo9_sdk"
-version = "0.8.0-beta.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5800682d8a143ac5722531f702fd011aa6b58cc17d96a8bed258f832835ca3d8"
+version = "0.8.0-beta.3"
 dependencies = [
+ "base64",
  "libc",
  "libloading",
  "serde",
@@ -873,7 +872,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "plugin_ai_chat"
-version = "5.2.3-beta.11"
+version = "5.2.3-beta.14"
 dependencies = [
  "aho-corasick",
  "base64",

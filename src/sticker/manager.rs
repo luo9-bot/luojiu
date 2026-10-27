@@ -3,7 +3,6 @@
 //! 负责表情包的注册、选择和维护。
 //! 使用视觉模型（VLM）进行表情包选择和描述生成。
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, info, warn};
 
@@ -89,7 +88,7 @@ pub(crate) fn register_from_cq(cq_message: &str) -> Option<String> {
     let urls = crate::vision::extract_image_urls(cq_message);
     for url in &urls {
         // 下载图片（超时由 util::http 统一强制，不在这里手工拼请求）
-        if let Ok(bytes) = crate::util::get_bytes(url) {
+        if let Ok(bytes) = crate::vision::load_image_bytes(url) {
             let format = detect_format(&bytes);
 
             // 内容过滤
@@ -125,7 +124,7 @@ pub(crate) fn describe_sticker_cq(cq_message: &str) -> Option<String> {
     let urls = crate::vision::extract_image_urls(cq_message);
     for url in &urls {
         // 1. 下载文件
-        let Ok(bytes) = crate::util::get_bytes(url) else {
+        let Ok(bytes) = crate::vision::load_image_bytes(url) else {
             continue;
         };
         let hash = compute_hash(&bytes);
@@ -369,9 +368,6 @@ fn select_with_vlm(image_paths: &[String], context: &str) -> Option<(usize, Stri
         }
     };
 
-    // 使用 base64 编码网格图（不依赖文件系统）
-    let base64_image = STANDARD.encode(&grid_bytes);
-
     // 构建 VLM 请求：单张网格图 + 选择 prompt
     let (cols, rows) = calculate_grid_shape(image_paths.len());
     let prompt = format!(
@@ -388,26 +384,14 @@ fn select_with_vlm(image_paths: &[String], context: &str) -> Option<(usize, Stri
         image_paths.len()
     );
 
-    let request_body = serde_json::json!({
-        "model": cfg.vision.model,
-        "input": [{
-            "role": "user",
-            "content": [
-                { "type": "input_image", "image_url": format!("data:image/png;base64,{}", base64_image) },
-                { "type": "input_text", "text": prompt }
-            ]
-        }],
-        "max_output_tokens": 256
-    });
-
-    let result =
-        match crate::vision::call_vlm(&cfg.vision.base_url, &cfg.vision.api_key, &request_body) {
-            Ok(response) => Some(response),
-            Err(error) => {
-                debug!(error = %error, "sticker: VLM 选择调用失败");
-                None
-            }
-        };
+    let image_url = crate::vision::image_data_url(&grid_bytes, cfg.vision.max_image_bytes).ok()?;
+    let result = match crate::vision::call_vlm(&[&image_url], &prompt, 256) {
+        Ok(response) => Some(response),
+        Err(error) => {
+            debug!(%error, "sticker: VLM 选择调用失败");
+            None
+        }
+    };
 
     match result {
         Some(response) => {
@@ -569,54 +553,12 @@ fn call_vlm_with_image(image_path: &std::path::Path, prompt: &str) -> Option<Str
     if !cfg.vision.enabled() {
         return None;
     }
-
-    // 读取文件
-    let image_bytes = match std::fs::read(image_path) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            warn!("读取图片文件失败: {}", e);
-            return None;
-        }
-    };
-
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    let base64_image = STANDARD.encode(&image_bytes);
-
-    // 根据扩展名推断 MIME 类型
-    let mime_type = image_path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(|ext| match ext.to_lowercase().as_str() {
-            "jpg" | "jpeg" => "image/jpeg",
-            "png" => "image/png",
-            "gif" => "image/gif",
-            "webp" => "image/webp",
-            _ => "image/png",
-        })
-        .unwrap_or("image/png");
-
-    let request_body = serde_json::json!({
-        "model": cfg.vision.model,
-        "input": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_image",
-                    "image_url": format!("data:{};base64,{}", mime_type, base64_image)
-                },
-                {
-                    "type": "input_text",
-                    "text": prompt
-                }
-            ]
-        }],
-        "max_output_tokens": cfg.vision.max_tokens
-    });
-
-    match crate::vision::call_vlm(&cfg.vision.base_url, &cfg.vision.api_key, &request_body) {
+    let bytes = std::fs::read(image_path).ok()?;
+    let image_url = crate::vision::image_data_url(&bytes, cfg.vision.max_image_bytes).ok()?;
+    match crate::vision::call_vlm(&[&image_url], prompt, cfg.vision.max_tokens) {
         Ok(text) => Some(text),
         Err(error) => {
-            debug!(error = %error, "sticker: VLM 描述调用失败");
+            debug!(%error, "sticker: VLM 描述调用失败");
             None
         }
     }

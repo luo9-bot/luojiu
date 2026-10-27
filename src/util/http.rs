@@ -147,12 +147,15 @@ pub(crate) fn post_json(
 ///
 /// 超时由本模块决定而不是调用方：这是一类固定的操作，调用方没有理由给出
 /// 不同的上限，也没有机会忘记给。
-pub(crate) fn get_bytes(url: &str) -> Result<Vec<u8>, HttpError> {
+/// 带字节上限下载图片，读取时即限制大小，避免先分配完整响应。
+pub(crate) fn get_bytes_limited(url: &str, max_bytes: usize) -> Result<Vec<u8>, HttpError> {
     agent(AgentSpec::requiring_success(IMAGE_DOWNLOAD_TIMEOUT_SECS))
         .get(url)
         .call()
         .map_err(|error| HttpError::Transport(Box::new(error)))?
-        .into_body()
+        .body_mut()
+        .with_config()
+        .limit(max_bytes as u64)
         .read_to_vec()
         .map_err(|error| HttpError::Body(Box::new(error)))
 }
@@ -261,12 +264,20 @@ mod tests {
     }
 
     #[test]
-    fn get_bytes_reports_transport_failure_instead_of_hanging() {
+    fn get_bytes_limited_reports_transport_failure_instead_of_hanging() {
         // 127.0.0.1:1 上不会有服务，连接应当立刻被拒绝
-        let error = get_bytes("http://127.0.0.1:1/nothing").expect_err("连接应当失败");
+        let error =
+            get_bytes_limited("http://127.0.0.1:1/nothing", 1024).expect_err("连接应当失败");
         assert!(
             matches!(error, HttpError::Transport(_)),
             "应当是传输层失败，实际 {error}"
         );
+    }
+
+    #[test]
+    fn image_download_rejects_body_larger_than_limit() {
+        let (base, join) = one_shot_server(|_| "12345678".to_owned());
+        assert!(get_bytes_limited(&base, 4).is_err());
+        join.join().unwrap();
     }
 }

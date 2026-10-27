@@ -1,65 +1,53 @@
-use crate::anti_injection;
-use crate::config;
+use crate::{
+    anti_injection,
+    config::{self, VisionApiFormat, VisionConfig, VisionDetail},
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde_json::{Value, json};
 use tracing::{debug, info};
 
-/// 从消息中提取 [CQ:image,...] 的图片 URL
+/// 提取 CQ 图片资源，优先 URL，缺少 URL 时保留 NapCat file 标识供查询。
 pub(crate) fn extract_image_urls(message: &str) -> Vec<String> {
     let mut urls = Vec::new();
     let mut remaining = message;
     while let Some(start) = remaining.find("[CQ:image,") {
         let after = &remaining[start + 10..];
-        if let Some(end) = after.find(']') {
-            let cq_content = &after[..end];
-            // 提取 url= 字段
-            if let Some(url_start) = cq_content.find("url=") {
-                let url_part = &cq_content[url_start + 4..];
-                let url = if let Some(comma) = url_part.find(',') {
-                    &url_part[..comma]
-                } else {
-                    url_part
-                };
-                if !url.is_empty() {
-                    urls.push(url.to_string());
-                }
-            }
-            remaining = &after[end + 1..];
-        } else {
-            break;
+        let Some(end) = after.find(']') else { break };
+        let fields: Vec<(&str, &str)> = after[..end]
+            .split(',')
+            .filter_map(|field| field.split_once('='))
+            .collect();
+        let source = ["url", "file"].iter().find_map(|key| {
+            fields
+                .iter()
+                .find(|(name, value)| name == key && !value.is_empty())
+                .map(|(_, value)| *value)
+        });
+        if let Some(source) = source {
+            urls.push(luo9_sdk::segment::unescape(source));
         }
+        remaining = &after[end + 1..];
     }
     urls
 }
 
-/// 去除消息中的 [CQ:image,...] 标签，返回纯文本
-///
-/// 只处理图片：视频/文件/转发等其它 CQ 码由 `conversation::turn::strip_cq_codes`
-/// 统一剥离（那里有完整的 CQ 语法处理）。这里的语义就是"去掉图片码"，
-/// 保留它是因为记忆与图片沉淀路径需要精确区分"这条消息本来有没有图"。
 pub(crate) fn strip_image_cq(message: &str) -> String {
     let mut result = String::with_capacity(message.len());
     let mut remaining = message;
     while let Some(start) = remaining.find("[CQ:image,") {
         result.push_str(&remaining[..start]);
         let after = &remaining[start + 10..];
-        if let Some(end) = after.find(']') {
-            remaining = &after[end + 1..];
-        } else {
-            // 不完整的 CQ 码，保留剩余部分
+        let Some(end) = after.find(']') else {
             result.push_str(&remaining[start..]);
-            return result.trim().to_string();
-        }
+            return result.trim().to_owned();
+        };
+        remaining = &after[end + 1..];
     }
     result.push_str(remaining);
-    result.trim().to_string()
+    result.trim().to_owned()
 }
 
-/// 调用识图 API，返回图片描述
-///
-/// 使用 OpenAI responses API 格式：POST {base_url}/responses
-/// 如果 api_key 未配置或调用失败，返回 None
-/// 注意：此函数需要 user_id 参数来检查识图禁用状态
 pub(crate) fn recognize_for_user(image_url: &str, user_id: u64) -> Option<String> {
-    // 检查用户是否被禁用识图
     if anti_injection::is_vision_disabled(user_id) {
         info!(user_id, "vision: 用户识图已被禁用");
         return None;
@@ -67,137 +55,351 @@ pub(crate) fn recognize_for_user(image_url: &str, user_id: u64) -> Option<String
     recognize(image_url)
 }
 
-/// VLM 调用的失败原因
-///
-/// 分成三类是因为处置方式不同：序列化失败是本地的编码 bug，传输失败通常是
-/// 上游不可达，没有文本则说明对方答应了却没给出可用内容。
 #[derive(Debug)]
 pub(crate) enum VlmError {
-    /// 请求体无法序列化
     Serialize(serde_json::Error),
-    /// 传输失败或响应体读取失败
     Http(crate::util::HttpError),
-    /// 响应里没有可提取的文本
+    Image(String),
+    Provider(String),
     NoText,
 }
-
 impl std::fmt::Display for VlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Serialize(error) => write!(f, "请求体序列化失败：{error}"),
+            Self::Serialize(error) => write!(f, "JSON 编码/解析失败: {error}"),
             Self::Http(error) => write!(f, "{error}"),
+            Self::Image(error) => write!(f, "图片处理失败: {error}"),
+            Self::Provider(error) => write!(f, "视觉 API 返回错误: {error}"),
             Self::NoText => write!(f, "响应里没有可提取的文本"),
         }
     }
 }
 
-/// `{base_url}/responses`：识图与表情包选择共用的 VLM 端点
-///
-/// 这是**唯一**一处 VLM 调用与响应解析。此前识图和表情包选择各写了一份，
-/// 连解析回退顺序都不一致——改一处必漏另一处。
-///
-/// 超时走 [`crate::ai::no_error_agent`]：VLM 也在串行消息队列的路径上，
-/// "不设超时"等于给整个 bot 留一个无限期停摆的入口。
-pub(crate) fn call_vlm(
-    base_url: &str,
-    api_key: &str,
-    body: &serde_json::Value,
-) -> Result<String, VlmError> {
-    let url = format!("{}/responses", base_url.trim_end_matches('/'));
-    let json_body = serde_json::to_string(body).map_err(VlmError::Serialize)?;
-
-    debug!(url = %url, "vision: sending request");
-
-    let response_body =
-        crate::util::post_json(&crate::ai::no_error_agent(), &url, api_key, &json_body)
-            .map_err(VlmError::Http)?;
-
-    extract_vlm_text(&response_body).ok_or_else(|| {
-        debug!(response = %response_body, "vision: 响应里没有可提取的文本");
-        VlmError::NoText
-    })
+#[derive(Clone)]
+struct VisionSettings {
+    base_url: String,
+    api_key: String,
+    model: String,
+    api_format: VisionApiFormat,
+    detail: VisionDetail,
+    max_image_bytes: usize,
+    native_deepseek: bool,
 }
 
-/// 从 VLM 响应里提取文本
-///
-/// 兼容三种上游形态，按可靠性从高到低回退：
-/// 1. responses API：`{ "output": [{ "content": [{ "text": "..." }] }] }`
-/// 2. chat completions：`{ "choices": [{ "message": { "content": "..." } }] }`
-/// 3. 直接字段：`output_text` / `text`
-fn extract_vlm_text(response_body: &str) -> Option<String> {
-    let value: serde_json::Value = serde_json::from_str(response_body).ok()?;
+fn is_deepseek(base_url: &str) -> bool {
+    let lower = base_url.trim().to_ascii_lowercase();
+    lower
+        .strip_prefix("https://")
+        .or_else(|| lower.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .and_then(|authority| authority.split(':').next())
+        == Some("api.deepseek.com")
+}
 
+fn resolve_settings(
+    vision: &VisionConfig,
+    main_base_url: &str,
+    main_api_key: &str,
+    main_model: &str,
+) -> VisionSettings {
+    let (base_url, api_key) = if vision.use_main_api {
+        (main_base_url, main_api_key)
+    } else {
+        (vision.base_url.as_str(), vision.api_key.as_str())
+    };
+    let native_deepseek = is_deepseek(base_url);
+    let api_format = match vision.api_format {
+        VisionApiFormat::Auto if native_deepseek => VisionApiFormat::ChatCompletions,
+        VisionApiFormat::Auto => VisionApiFormat::Responses,
+        other => other,
+    };
+    VisionSettings {
+        base_url: base_url.trim().trim_end_matches('/').to_owned(),
+        api_key: api_key.trim().to_owned(),
+        model: if vision.model.trim().is_empty() {
+            main_model.trim()
+        } else {
+            vision.model.trim()
+        }
+        .to_owned(),
+        api_format,
+        detail: vision.detail,
+        max_image_bytes: vision.max_image_bytes.clamp(1, 32 * 1024 * 1024),
+        native_deepseek,
+    }
+}
+
+fn endpoint(settings: &VisionSettings) -> String {
+    let base = settings.base_url.trim_end_matches('/');
+    let base = base
+        .strip_suffix("/chat/completions")
+        .or_else(|| base.strip_suffix("/responses"))
+        .unwrap_or(base);
+    format!(
+        "{base}/{}",
+        match settings.api_format {
+            VisionApiFormat::ChatCompletions => "chat/completions",
+            _ => "responses",
+        }
+    )
+}
+
+fn request_body(
+    settings: &VisionSettings,
+    images: &[String],
+    prompt: &str,
+    max_tokens: u32,
+) -> Value {
+    let mut content = Vec::with_capacity(images.len() + 1);
+    let mut body = match settings.api_format {
+        VisionApiFormat::ChatCompletions => {
+            content.push(json!({"type":"text", "text":prompt}));
+            content.extend(images.iter().map(|url| {
+                if url.starts_with("file-api-") {
+                    json!({"type":"file", "file_id":url})
+                } else {
+                    json!({"type":"image_url", "image_url":{"url":url, "detail":settings.detail}})
+                }
+            }));
+            json!({"model":settings.model, "messages":[{"role":"user", "content":content}], "max_tokens":max_tokens.max(1), "stream":false})
+        }
+        _ => {
+            content.push(json!({"type":"input_text", "text":prompt}));
+            content.extend(images.iter().map(|url| {
+                if url.starts_with("file-api-") {
+                    json!({"type":"input_image", "file_id":url})
+                } else {
+                    json!({"type":"input_image", "image_url":url, "detail":settings.detail})
+                }
+            }));
+            json!({"model":settings.model, "input":[{"role":"user", "content":content}], "max_output_tokens":max_tokens.max(1)})
+        }
+    };
+    if settings.native_deepseek && settings.api_format == VisionApiFormat::ChatCompletions {
+        body["thinking"] = json!({"type":"disabled"});
+    }
+    body
+}
+
+/// 依据真实文件内容判断 MIME；限制字节数，避免只信扩展名。
+pub(crate) fn image_data_url(bytes: &[u8], max_bytes: usize) -> Result<String, VlmError> {
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(VlmError::Image("图片为空或超过大小上限".into()));
+    }
+    let mime = match image::guess_format(bytes) {
+        Ok(image::ImageFormat::Png) => "image/png",
+        Ok(image::ImageFormat::Jpeg) => "image/jpeg",
+        Ok(image::ImageFormat::Gif) => "image/gif",
+        Ok(image::ImageFormat::WebP) => "image/webp",
+        _ => return Err(VlmError::Image("仅支持 JPEG、PNG、GIF、WebP 图片".into())),
+    };
+    Ok(format!("data:{mime};base64,{}", STANDARD.encode(bytes)))
+}
+
+fn decode_image(encoded: &str, limit: usize) -> Result<String, VlmError> {
+    if encoded.len() > limit.saturating_add(2) / 3 * 4 {
+        return Err(VlmError::Image("Base64 图片超过大小上限".into()));
+    }
+    let bytes = STANDARD
+        .decode(encoded)
+        .map_err(|e| VlmError::Image(e.to_string()))?;
+    image_data_url(&bytes, limit)
+}
+
+fn prepare_image(source: &str, settings: &VisionSettings) -> Result<String, VlmError> {
+    if source.starts_with("file-api-") {
+        return Ok(source.to_owned());
+    }
+    if let Some(encoded) = source.strip_prefix("base64://") {
+        return decode_image(encoded, settings.max_image_bytes);
+    }
+    if source.starts_with("data:") {
+        let (header, encoded) = source
+            .split_once(',')
+            .ok_or_else(|| VlmError::Image("无效的 data URL".into()))?;
+        if !header.ends_with(";base64") {
+            return Err(VlmError::Image("图片 data URL 必须使用 Base64".into()));
+        }
+        return decode_image(encoded, settings.max_image_bytes);
+    }
+    if source.starts_with("https://") || source.starts_with("http://") {
+        // QQ 临时链接由插件下载并内联传给 DeepSeek，避免模型侧无法访问 QQ 链接。
+        if settings.native_deepseek {
+            let bytes = crate::util::get_bytes_limited(source, settings.max_image_bytes)
+                .map_err(VlmError::Http)?;
+            return image_data_url(&bytes, settings.max_image_bytes);
+        }
+        return Ok(source.to_owned());
+    }
+    let path = std::path::Path::new(source);
+    if path.is_file() {
+        let metadata = path
+            .metadata()
+            .map_err(|e| VlmError::Image(e.to_string()))?;
+        if metadata.len() > settings.max_image_bytes as u64 {
+            return Err(VlmError::Image("本地图片超过大小上限".into()));
+        }
+        let bytes = std::fs::read(path).map_err(|e| VlmError::Image(e.to_string()))?;
+        return image_data_url(&bytes, settings.max_image_bytes);
+    }
+    // file:// 或 NapCat 哈希不是插件本机路径；经宿主查询资源。
+    let metadata = luo9_sdk::napcat::ApiClient::new(std::time::Duration::from_secs(5))
+        .get_image(source)
+        .map_err(|e| VlmError::Image(format!("获取 NapCat 图片失败: {e}")))?;
+    if let Some(base64) = metadata
+        .get("base64")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+    {
+        return decode_image(base64, settings.max_image_bytes);
+    }
+    for key in ["url", "file"] {
+        if let Some(resource) = metadata
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|s| *s != source)
+        {
+            if resource.starts_with("http://")
+                || resource.starts_with("https://")
+                || std::path::Path::new(resource).is_file()
+            {
+                return prepare_image(resource, settings);
+            }
+        }
+    }
+    Err(VlmError::Image(
+        "NapCat 只返回了远端路径，请启用 enableLocalFile2Url 或提供可访问的 URL".into(),
+    ))
+}
+
+/// 所有识图、表情包描述和表情包选择共用此调用路径。
+pub(crate) fn call_vlm(images: &[&str], prompt: &str, max_tokens: u32) -> Result<String, VlmError> {
+    let cfg = config::get();
+    let settings = resolve_settings(&cfg.vision, &cfg.base_url, &cfg.api_key, &cfg.model);
+    if !cfg.vision.enabled() || settings.api_key.is_empty() {
+        return Err(VlmError::Provider("识图未启用或 API 密钥为空".into()));
+    }
+    let images: Vec<String> = images
+        .iter()
+        .map(|source| prepare_image(source, &settings))
+        .collect::<Result<_, _>>()?;
+    send_vlm(
+        &settings,
+        &images,
+        prompt,
+        max_tokens,
+        &crate::ai::no_error_agent(),
+    )
+}
+
+/// 表情包缓存与识图使用同一资源解析路径，支持 file 标识和内联图片。
+pub(crate) fn load_image_bytes(source: &str) -> Result<Vec<u8>, VlmError> {
+    let cfg = config::get();
+    let settings = resolve_settings(&cfg.vision, &cfg.base_url, &cfg.api_key, &cfg.model);
+    if source.starts_with("http://") || source.starts_with("https://") {
+        return crate::util::get_bytes_limited(source, settings.max_image_bytes)
+            .map_err(VlmError::Http);
+    }
+    let url = prepare_image(source, &settings)?;
+    if url.starts_with("http://") || url.starts_with("https://") {
+        return crate::util::get_bytes_limited(&url, settings.max_image_bytes)
+            .map_err(VlmError::Http);
+    }
+    let (_, encoded) = url
+        .split_once(',')
+        .ok_or_else(|| VlmError::Image("图片资源不是内联数据".into()))?;
+    STANDARD
+        .decode(encoded)
+        .map_err(|error| VlmError::Image(error.to_string()))
+}
+
+fn send_vlm(
+    settings: &VisionSettings,
+    images: &[String],
+    prompt: &str,
+    max_tokens: u32,
+    agent: &ureq::Agent,
+) -> Result<String, VlmError> {
+    let url = endpoint(settings);
+    let json_body = serde_json::to_string(&request_body(settings, images, prompt, max_tokens))
+        .map_err(VlmError::Serialize)?;
+    debug!(model = %settings.model, format = ?settings.api_format, "vision: 发送视觉请求");
+    let body = crate::util::post_json(agent, &url, &settings.api_key, &json_body)
+        .map_err(VlmError::Http)?;
+    let value: Value = serde_json::from_str(&body).map_err(VlmError::Serialize)?;
+    if let Some(error) = value.get("error").filter(|e| !e.is_null()) {
+        let message = error
+            .get("message")
+            .and_then(Value::as_str)
+            .or_else(|| error.as_str())
+            .unwrap_or("上游请求失败");
+        return Err(VlmError::Provider(message.to_owned()));
+    }
+    extract_vlm_value(&value).ok_or(VlmError::NoText)
+}
+
+fn extract_vlm_value(value: &Value) -> Option<String> {
+    let clean = |text: String| (!text.trim().is_empty()).then(|| text.trim().to_owned());
     let from_responses = value
         .get("output")
-        .and_then(|output| output.as_array())
+        .and_then(Value::as_array)
         .and_then(|output| {
-            output.iter().find_map(|item| {
-                item.get("content")
-                    .and_then(|content| content.as_array())
-                    .and_then(|contents| {
-                        contents.iter().find_map(|content| {
-                            content
-                                .get("text")
-                                .and_then(|text| text.as_str())
-                                .map(str::to_string)
-                        })
-                    })
-            })
+            let texts: Vec<&str> = output
+                .iter()
+                .filter(|item| item.get("type").and_then(Value::as_str) != Some("reasoning"))
+                .filter_map(|item| item.get("content").and_then(Value::as_array))
+                .flatten()
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect();
+            clean(texts.join("\n"))
         });
-
     let from_choices = value
         .get("choices")
-        .and_then(|choices| choices.as_array())
+        .and_then(Value::as_array)
         .and_then(|choices| choices.first())
         .and_then(|choice| choice.get("message"))
         .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .map(str::to_string);
-
-    let from_plain_text = ["output_text", "text"]
-        .iter()
-        .find_map(|key| value.get(key).and_then(|text| text.as_str()))
-        .map(str::to_string);
-
-    from_responses.or(from_choices).or(from_plain_text)
+        .and_then(|content| {
+            if let Some(text) = content.as_str() {
+                clean(text.to_owned())
+            } else {
+                content.as_array().and_then(|parts| {
+                    clean(
+                        parts
+                            .iter()
+                            .filter_map(|part| part.get("text").and_then(Value::as_str))
+                            .collect::<Vec<_>>()
+                            .join("\n"),
+                    )
+                })
+            }
+        });
+    from_responses.or(from_choices).or_else(|| {
+        ["output_text", "text"]
+            .iter()
+            .filter_map(|key| value.get(key).and_then(Value::as_str))
+            .find_map(|text| clean(text.to_owned()))
+    })
 }
 
-/// 调用识图 API，返回图片描述 (不检查用户禁用状态)
-///
-/// 使用 OpenAI responses API 格式：POST {base_url}/responses
-/// 如果 api_key 未配置或调用失败，返回 None
+#[cfg(test)]
+fn extract_vlm_text(body: &str) -> Option<String> {
+    extract_vlm_value(&serde_json::from_str::<Value>(body).ok()?)
+}
+
 pub(crate) fn recognize(image_url: &str) -> Option<String> {
-    info!(url = %image_url, "vision: 开始识别图片");
     let cfg = config::get();
     if !cfg.vision.enabled() {
         return None;
     }
-
-    let request_body = serde_json::json!({
-        "model": cfg.vision.model,
-        "input": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "input_image",
-                    "image_url": image_url
-                },
-                {
-                    "type": "input_text",
-                    "text": crate::prompt::PromptManager::get().raw("vision_describe")
-                }
-            ]
-        }],
-        "max_output_tokens": cfg.vision.max_tokens
-    });
-
-    match call_vlm(&cfg.vision.base_url, &cfg.vision.api_key, &request_body) {
-        Ok(text) => {
-            debug!(result = %text, "vision: got description");
-            Some(text)
-        }
+    match call_vlm(
+        &[image_url],
+        &crate::prompt::PromptManager::get().raw("vision_describe"),
+        cfg.vision.max_tokens,
+    ) {
+        Ok(text) => Some(text),
         Err(error) => {
-            debug!(error = %error, "vision: 识图失败");
+            debug!(%error, "vision: 识图失败");
             None
         }
     }
@@ -206,49 +408,193 @@ pub(crate) fn recognize(image_url: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn responses_api_shape_is_understood() {
-        let body = r#"{"output":[{"content":[{"type":"output_text","text":"一只橘猫"}]}]}"#;
-        assert_eq!(extract_vlm_text(body).as_deref(), Some("一只橘猫"));
+    fn settings(format: VisionApiFormat) -> VisionSettings {
+        let mut vision = VisionConfig::default();
+        vision.api_key = "sk-test".into();
+        vision.api_format = format;
+        resolve_settings(
+            &vision,
+            "https://api.deepseek.com",
+            "sk-main",
+            "deepseek-flash",
+        )
     }
-
     #[test]
-    fn chat_completions_shape_is_understood() {
-        let body = r#"{"choices":[{"message":{"content":"一只橘猫"}}]}"#;
-        assert_eq!(extract_vlm_text(body).as_deref(), Some("一只橘猫"));
-    }
-
-    #[test]
-    fn plain_text_fields_are_understood() {
+    fn native_deepseek_uses_current_model_and_chat_image_blocks() {
+        let settings = settings(VisionApiFormat::Auto);
+        assert_eq!(settings.model, "deepseek-flash");
         assert_eq!(
-            extract_vlm_text(r#"{"output_text":"甲"}"#).as_deref(),
-            Some("甲")
+            endpoint(&settings),
+            "https://api.deepseek.com/chat/completions"
         );
-        assert_eq!(extract_vlm_text(r#"{"text":"乙"}"#).as_deref(), Some("乙"));
+        let body = request_body(
+            &settings,
+            &["data:image/png;base64,abc".into()],
+            "描述图片",
+            256,
+        );
+        assert_eq!(body["messages"][0]["role"], "user");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
+        assert_eq!(body["thinking"]["type"], "disabled");
+        assert!(body.get("input").is_none());
     }
-
-    /// 有 output 键但里面没有文本时，必须继续往后面的形态回退
     #[test]
-    fn an_empty_output_still_falls_back_to_choices() {
-        let body = r#"{"output":[],"choices":[{"message":{"content":"回退成功"}}]}"#;
-        assert_eq!(extract_vlm_text(body).as_deref(), Some("回退成功"));
+    fn main_credentials_and_legacy_responses_are_both_supported() {
+        let mut vision = VisionConfig::default();
+        vision.use_main_api = true;
+        assert!(vision.enabled());
+        let settings = resolve_settings(
+            &vision,
+            "https://api.deepseek.com/v1/",
+            "sk-main",
+            "deepseek-chat",
+        );
+        assert_eq!(settings.api_key, "sk-main");
+        assert_eq!(
+            endpoint(&settings),
+            "https://api.deepseek.com/v1/chat/completions"
+        );
+        vision.use_main_api = false;
+        vision.api_key = "sk-independent".into();
+        vision.base_url = "https://ark.cn-beijing.volces.com/api/v3".into();
+        let settings = resolve_settings(&vision, "unused", "sk-main", "model");
+        assert_eq!(settings.api_format, VisionApiFormat::Responses);
+        let body = request_body(
+            &settings,
+            &["https://example.test/a.png".into()],
+            "描述",
+            64,
+        );
+        assert_eq!(body["input"][0]["content"][1]["type"], "input_image");
+        assert!(body.get("thinking").is_none());
     }
-
     #[test]
-    fn junk_responses_yield_nothing_instead_of_panicking() {
-        for body in ["", "not json at all", "{}", r#"{"output":"不是数组"}"#] {
-            assert_eq!(extract_vlm_text(body), None, "{body:?}");
+    fn explicit_responses_and_empty_model_fallback_work() {
+        let mut settings = settings(VisionApiFormat::Responses);
+        settings.base_url = "https://api.deepseek.com/responses/".into();
+        assert_eq!(endpoint(&settings), "https://api.deepseek.com/responses");
+        let mut vision = VisionConfig::default();
+        vision.model = " \t ".into();
+        assert_eq!(
+            resolve_settings(&vision, "", "", "deepseek-flash").model,
+            "deepseek-flash"
+        );
+        let body = request_body(&settings, &["file-api-existing".into()], "描述", 64);
+        assert_eq!(
+            body["input"][0]["content"][1]["file_id"],
+            "file-api-existing"
+        );
+        assert!(body["input"][0]["content"][1].get("image_url").is_none());
+        settings.api_format = VisionApiFormat::ChatCompletions;
+        let body = request_body(&settings, &["file-api-existing".into()], "描述", 64);
+        assert_eq!(body["messages"][0]["content"][1]["type"], "file");
+    }
+    #[test]
+    fn response_text_is_complete_and_ignores_reasoning() {
+        assert_eq!(extract_vlm_text(r#"{"output":[{"type":"reasoning","content":[{"text":"隐藏推理"}]},{"content":[{"text":"第一段"},{"text":"第二段"}]}]}"#).as_deref(), Some("第一段\n第二段"));
+        assert_eq!(
+            extract_vlm_text(
+                r#"{"choices":[{"message":{"reasoning_content":"推理","content":"猫"}}]}"#
+            )
+            .as_deref(),
+            Some("猫")
+        );
+        assert_eq!(
+            extract_vlm_text(r#"{"output":[],"choices":[{"message":{"content":"回退"}}]}"#)
+                .as_deref(),
+            Some("回退")
+        );
+        for body in ["", "junk", "{}", r#"{"output_text":" "}"#] {
+            assert!(extract_vlm_text(body).is_none());
         }
     }
-
     #[test]
-    fn image_urls_are_extracted_and_stripped() {
-        let message = "看这个[CQ:image,file=a.jpg,url=https://example.com/a.jpg]好看吗";
+    fn cq_images_decode_parameters_and_keep_file_only_resources() {
         assert_eq!(
-            extract_image_urls(message),
-            vec!["https://example.com/a.jpg".to_string()]
+            extract_image_urls(
+                "看[CQ:image,file=hash,url=https://example.test/a&#44;b?x=1&amp;y=2][CQ:image,file=file://abc]"
+            ),
+            vec!["https://example.test/a,b?x=1&y=2", "file://abc"]
         );
-        assert_eq!(strip_image_cq(message), "看这个好看吗");
+        assert_eq!(strip_image_cq("看[CQ:image,file=hash]图"), "看图");
+        assert_eq!(
+            strip_image_cq("看[CQ:image,file=hash"),
+            "看[CQ:image,file=hash"
+        );
+    }
+    #[test]
+    fn images_use_actual_format_and_enforce_size() {
+        let png = b"\x89PNG\r\n\x1a\nmorebytes";
+        let url = image_data_url(png, 32).unwrap();
+        assert!(url.starts_with("data:image/png;base64,"));
+        assert!(image_data_url(png, 2).is_err());
+        assert!(image_data_url(b"not an image", 100).is_err());
+        assert!(decode_image(&STANDARD.encode(png), 2).is_err());
+        assert!(!is_deepseek("https://api.deepseek.com.evil.test"));
+    }
+    #[test]
+    fn chat_and_responses_requests_work_over_http_and_return_provider_errors() {
+        for format in [VisionApiFormat::ChatCompletions, VisionApiFormat::Responses] {
+            let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+            let mut settings = settings(format);
+            settings.base_url = format!("http://{}", server.server_addr());
+            let handler =
+                std::thread::spawn(move || {
+                    for failed in [false, true] {
+                        let mut request = server.recv().unwrap();
+                        let expected = if format == VisionApiFormat::ChatCompletions {
+                            "/chat/completions"
+                        } else {
+                            "/responses"
+                        };
+                        assert_eq!(request.url(), expected);
+                        assert!(
+                            request
+                                .headers()
+                                .iter()
+                                .any(|h| h.field.equiv("Authorization")
+                                    && h.value.as_str() == "Bearer sk-test")
+                        );
+                        let mut raw = String::new();
+                        request.as_reader().read_to_string(&mut raw).unwrap();
+                        let value: Value = serde_json::from_str(&raw).unwrap();
+                        if format == VisionApiFormat::ChatCompletions {
+                            assert_eq!(
+                                value["messages"][0]["content"][1]["image_url"]["url"],
+                                "data:image/png;base64,abc"
+                            );
+                        } else {
+                            assert_eq!(
+                                value["input"][0]["content"][1]["image_url"],
+                                "data:image/png;base64,abc"
+                            );
+                        }
+                        let body = if failed {
+                            r#"{"error":{"message":"model does not support images"}}"#
+                        } else if format == VisionApiFormat::ChatCompletions {
+                            r#"{"choices":[{"message":{"content":"图片描述"}}]}"#
+                        } else {
+                            r#"{"output":[{"content":[{"text":"图片描述"}]}]}"#
+                        };
+                        request
+                            .respond(
+                                tiny_http::Response::from_string(body)
+                                    .with_status_code(if failed { 400 } else { 200 }),
+                            )
+                            .unwrap();
+                    }
+                });
+            let agent = crate::util::agent(crate::util::AgentSpec::reading_error_body(5));
+            let images = vec!["data:image/png;base64,abc".to_owned()];
+            assert_eq!(
+                send_vlm(&settings, &images, "描述", 100, &agent).unwrap(),
+                "图片描述"
+            );
+            assert!(matches!(
+                send_vlm(&settings, &images, "描述", 100, &agent),
+                Err(VlmError::Provider(_))
+            ));
+            handler.join().unwrap();
+        }
     }
 }

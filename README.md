@@ -170,7 +170,7 @@ Replyer (回复生成)
 | `reply_effect/` | 回复效果追踪 + ASI 评分 + LLM Judge |
 | `learner/` | 表达学习（情境→表达模式、黑话挖掘） |
 | `sticker/` | 表情包系统（VLM 网格选择、自动收集、内容过滤） |
-| `vision/` | 识图（Doubao VLM） |
+| `vision/` | DeepSeek 原生识图及兼容视觉 API |
 | `activity/` | 活动状态（训练/吃饭/睡觉等） |
 | `conversation_end/` | 对话结束检测 |
 | `schedule/` | 日/周/月计划自动生成与推送 |
@@ -274,10 +274,13 @@ self_reflection:
   interval: 1800              # 反思间隔 (秒)
   post_conversation_delay_secs: 120
 
-# ── 识图 (Doubao VLM)
+# ── 识图（复用主 DeepSeek API）
 vision:
-  api_key: ""
-  model: "doubao-1.5-vision-pro-32k"
+  use_main_api: true
+  api_format: "auto"
+  model: "deepseek-flash"
+  detail: "auto"
+  max_image_bytes: 10485760
 
 # ── Embedding
 embedding:
@@ -295,6 +298,29 @@ blacklist: []                 # 黑名单
 auto_start_users: []          # 自动开启私聊
 auto_start_groups: []         # 自动开启群聊
 ```
+
+## 视觉功能与本地联调
+
+`vision.use_main_api: true` 使用顶层的 `base_url` 和 `api_key`，图片识别、表情包描述及
+表情包选择均可调用 DeepSeek 原生视觉模型，无需额外配置第三方识图服务。
+按 2026-10-27 的[官方视觉文档](https://api-docs.deepseek.com/zh-cn/guides/vision)，
+默认视觉模型为 `deepseek-flash`。若要使用主模型名称，可将 `vision.model` 设为空，
+但主模型必须支持图片输入。
+
+`api_format: auto` 对 DeepSeek 使用 `/chat/completions`，其他地址沿用 `/responses`。
+可显式选择 `chat_completions` 或 `responses`；旧 Doubao 配置仍可使用。
+默认模板保持 `use_main_api: false`，独立密钥为空时继续禁用识图。
+
+支持 HTTP(S) 图片、Base64 data URL、NapCat 图片文件标识和已有 DeepSeek Files API
+的 `file-api-...` ID。QQ 图片链接在使用 DeepSeek 时由插件先限量下载，按实际格式
+生成 data URL；图片上限默认 10 MiB，内联单图最多 32 MiB。只有 NapCat 远端路径时，
+需在 NapCat 启用 `enableLocalFile2Url` 以返回 Base64，或提供插件可访问的 URL。
+图片描述继续经过现有防注入检查，并沿用现有记忆和表情包缓存流程。
+
+本地构建使用相邻的 `../luo9_sdk_rust`，SDK 版本为 `0.8.0-beta.3`，应与
+`luo9_bot 0.1.0-beta.13` 一起更新。研究参考了
+[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)
+的资源加载、内容格式判断和统一视觉调用方式。
 
 ## 免责声明
 

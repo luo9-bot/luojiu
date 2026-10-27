@@ -90,6 +90,9 @@
               <option :value="true">是</option>
               <option :value="false">否</option>
             </select>
+            <select v-else-if="f.type === 'select'" v-model="editForm[f.key]" class="glass-select">
+              <option v-for="option in f.options" :key="option" :value="option">{{ option }}</option>
+            </select>
             <input v-else-if="f.type === 'array'"
                    v-model="editForm[f.key]" class="glass-input" placeholder="逗号分隔多个值" />
             <div v-else-if="f.type === 'readonly-array'" class="readonly-hint">该字段是启动期导入项；运行时请使用专用黑名单管理页面。</div>
@@ -186,9 +189,13 @@ const sections = [
   },
   { id: 'vision', label: '识图', color: 'var(--info)',
     fields: [
-      { key: 'vision.api_key', label: 'API 密钥', type: 'string' },
+      { key: 'vision.use_main_api', label: '使用主 API 地址和密钥', type: 'bool' },
+      { key: 'vision.api_format', label: 'API 格式', type: 'select', options: ['auto', 'chat_completions', 'responses'] },
+      { key: 'vision.api_key', label: '独立 API 密钥', type: 'string' },
       { key: 'vision.base_url', label: 'API 地址', type: 'string' },
       { key: 'vision.model', label: '模型', type: 'string' },
+      { key: 'vision.detail', label: '图片细节', type: 'select', options: ['auto', 'low', 'high', 'original'] },
+      { key: 'vision.max_image_bytes', label: '图片大小上限(字节)', type: 'number' },
       { key: 'vision.max_tokens', label: '最大 Tokens', type: 'number' },
       { key: 'vision.memory_images', label: '图片描述写入记忆', type: 'bool' },
     ]

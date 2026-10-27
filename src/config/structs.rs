@@ -243,7 +243,19 @@ pub(crate) struct SearchConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub(crate) struct VisionConfig {
-    /// 识图 API key，为空则禁用识图功能
+    /// 使用主 API 的地址和密钥；默认关闭以兼容原来空密钥即禁用的配置。
+    #[serde(default)]
+    pub use_main_api: bool,
+    /// 请求格式；auto 对 DeepSeek 使用 Chat Completions，其他地址沿用 Responses。
+    #[serde(default)]
+    pub api_format: VisionApiFormat,
+    /// 图片细节级别。
+    #[serde(default)]
+    pub detail: VisionDetail,
+    /// 单张内联图片上限；DeepSeek 最大 32 MiB。
+    #[serde(default = "default_vision_max_image_bytes")]
+    pub max_image_bytes: usize,
+    /// 独立识图 API key，use_main_api=false 且为空则禁用识图功能。
     #[serde(default)]
     pub api_key: String,
     /// API base URL
@@ -263,6 +275,10 @@ pub(crate) struct VisionConfig {
 impl Default for VisionConfig {
     fn default() -> Self {
         Self {
+            use_main_api: false,
+            api_format: VisionApiFormat::Auto,
+            detail: VisionDetail::Auto,
+            max_image_bytes: default_vision_max_image_bytes(),
             api_key: String::new(),
             base_url: default_vision_base_url(),
             model: default_vision_model(),
@@ -274,8 +290,27 @@ impl Default for VisionConfig {
 
 impl VisionConfig {
     pub(crate) fn enabled(&self) -> bool {
-        !self.api_key.is_empty()
+        self.use_main_api || !self.api_key.trim().is_empty()
     }
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VisionApiFormat {
+    #[default]
+    Auto,
+    ChatCompletions,
+    Responses,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum VisionDetail {
+    #[default]
+    Auto,
+    Low,
+    High,
+    Original,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -866,7 +901,10 @@ fn default_vision_base_url() -> String {
     "https://api.deepseek.com".into()
 }
 fn default_vision_model() -> String {
-    "	deepseek-v4-flash".into()
+    "deepseek-flash".into()
+}
+fn default_vision_max_image_bytes() -> usize {
+    10 * 1024 * 1024
 }
 fn default_vision_max_tokens() -> u32 {
     256
