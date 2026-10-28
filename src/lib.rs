@@ -306,6 +306,7 @@ pub extern "C" fn plugin_main() {
 
     config::init();
     extension::initialize();
+    let _extension_shutdown = extension::ShutdownGuard;
     extension::initialize();
     // Growth Lab Phase A is initialized before live message processing; it only records telemetry.
     mind::growth_lab::init();

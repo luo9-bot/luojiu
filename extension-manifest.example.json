@@ -22,13 +22,6 @@
     "group": "extensions",
     "order": 100
   },
-  "entrypoint": "plugin.dll",
-  "runtime": {
-    "abi": 1,
-    "symbols": {
-      "init": "luo9_extension_init",
-      "shutdown": "luo9_extension_shutdown",
-      "on_event": "luo9_extension_on_event"
-    }
-  }
+  "entrypoint": "plugin.exe",
+  "runtime": { "type": "process", "bus_abi": 1 }
 }

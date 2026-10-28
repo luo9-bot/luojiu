@@ -302,6 +302,13 @@ pub(crate) fn initialize() {
         "extension: registry initialized"
     );
 }
+
+pub(crate) struct ShutdownGuard;
+impl Drop for ShutdownGuard {
+    fn drop(&mut self) {
+        runtime::shutdown_all();
+    }
+}
 pub(crate) fn snapshot() -> ExtensionSnapshot {
     let enabled = state()
         .read()

@@ -328,30 +328,29 @@ auto_start_groups: []         # 自动开启群聊
 状态持久化和管理端接入；外部代码运行时会显示为“仅清单”，不会被当作可执行插件加载。
 这样可以先稳定扩展协议，再接入 WASI 或动态库运行时，避免扩展安装和执行耦合在 WebUI 里。
 
-### 动态库 ABI
+### 隔离式扩展进程与 Bus 协议
 
-外部动态库必须放在对应扩展目录内，并由 manifest 的 `entrypoint` 指定相对路径。
-当前 ABI 版本为 `1`，必须导出以下 C ABI 符号：
+外部扩展作为独立进程运行，不会被加载进宿主。manifest 的 `entrypoint` 指向扩展目录
+内的可执行文件，例如 `plugin.exe`、`plugin` 或 `plugin.py` 的启动包装器。宿主会通过
+环境变量传入扩展 ID、配置文件路径、ABI 版本和三个专用 topic：
 
 ```text
-luo9_extension_init(*const HostApi) -> i32
-luo9_extension_shutdown() -> ()
-luo9_extension_on_event(*const c_char) -> i32   # 可选
+LUO9_EXTENSION_EVENT_TOPIC    luo9_extension.<id>.event
+LUO9_EXTENSION_COMMAND_TOPIC  luo9_extension.<id>.command
+LUO9_EXTENSION_RESPONSE_TOPIC luo9_extension.<id>.response
 ```
 
-`HostApi` 提供 ABI 版本、日志回调、读取扩展配置和释放字符串回调。事件回调收到
-JSON 字符串，目前包含 `luo9_message` 消息事件。宿主会校验 entrypoint 不得越出扩展
-目录，初始化失败不会影响核心消息循环；扩展会在 WebUI 中显示为 unhealthy。启停
-扩展时会实时加载或卸载库，卸载前调用 shutdown。
+扩展进程启动后使用 `luo9_sdk::bus::Bus` 初始化总线，订阅自己的 event/command topic。
+宿主会把 `luo9_message` JSON 事件发布到 event topic；扩展可以把命令发布到 command
+topic，把执行结果发布到 response topic。扩展崩溃只会被宿主标记为 stopped，不会影响
+Bot 或插件进程。宿主还会校验 entrypoint 不得越出扩展目录，并在 WebUI 中显示进程状态。
 
-可直接参考 [extension-abi/luo9_extension.h](extension-abi/luo9_extension.h) 和
-[extension-abi/example.c](extension-abi/example.c)。扩展目录需要包含自己的
-`manifest.json` 和编译产物，例如：
+扩展目录需要包含自己的 `manifest.json` 和可执行文件，例如：
 
 ```text
 data/plugin_ai_chat/extensions/example.weather/
 ├── manifest.json
-└── plugin.dll      # Linux 使用 plugin.so，macOS 使用 plugin.dylib
+└── plugin.exe      # Linux 使用 plugin，macOS 使用 plugin
 ```
 
 市场目录通过 `LUO9_EXTENSION_MARKET_URL` 配置，接口应返回 `MarketEntry[]` JSON 数组：

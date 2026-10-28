@@ -1,92 +1,38 @@
-//! 动态库扩展运行时。
-//!
-//! ABI 是故意保持很小的 C ABI：扩展只需要导出 init/shutdown/on_event，
-//! 宿主负责库生命周期和配置。所有入口均为可选，缺失符号会在加载时报告。
+//! 隔离式扩展运行时：扩展作为独立进程，通过 Luo9 Bus 通信。
 
 use super::{ExtensionKind, ExtensionManifest};
 use crate::config;
-use libloading::Library;
-use std::ffi::{CStr, CString, c_char};
+use luo9_sdk::bus::Bus;
 use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use tracing::{info, warn};
 
-pub(super) const ABI_VERSION: u32 = 1;
-const INIT_SYMBOL: &[u8] = b"luo9_extension_init\0";
-const SHUTDOWN_SYMBOL: &[u8] = b"luo9_extension_shutdown\0";
-const EVENT_SYMBOL: &[u8] = b"luo9_extension_on_event\0";
+pub(super) const BUS_ABI_VERSION: u32 = 1;
 
-#[repr(C)]
-pub(super) struct HostApi {
-    pub abi_version: u32,
-    pub log: Option<extern "C" fn(*const c_char)>,
-    pub get_config: Option<extern "C" fn(*const c_char) -> *mut c_char>,
-    pub free_string: Option<extern "C" fn(*mut c_char)>,
-}
-
-type Init = unsafe extern "C" fn(*const HostApi) -> i32;
-type Shutdown = unsafe extern "C" fn();
-type OnEvent = unsafe extern "C" fn(*const c_char) -> i32;
-
-struct LoadedExtension {
+struct RunningExtension {
     id: String,
-    library: Library,
-    shutdown: Shutdown,
-    on_event: Option<OnEvent>,
+    event_topic: String,
+    child: Child,
 }
-
-static LOADED: OnceLock<Mutex<Vec<LoadedExtension>>> = OnceLock::new();
-
-fn loaded() -> &'static Mutex<Vec<LoadedExtension>> {
-    LOADED.get_or_init(|| Mutex::new(Vec::new()))
+static RUNNING: OnceLock<Mutex<Vec<RunningExtension>>> = OnceLock::new();
+fn running() -> &'static Mutex<Vec<RunningExtension>> {
+    RUNNING.get_or_init(|| Mutex::new(Vec::new()))
 }
-
-extern "C" fn host_log(message: *const c_char) {
-    if message.is_null() {
-        return;
-    }
-    let message = unsafe { CStr::from_ptr(message) }.to_string_lossy();
-    info!(target: "extension", "{message}");
-}
-
-extern "C" fn host_get_config(id: *const c_char) -> *mut c_char {
-    if id.is_null() {
-        return std::ptr::null_mut();
-    }
-    let id = unsafe { CStr::from_ptr(id) }.to_string_lossy();
-    let snapshot = super::snapshot();
-    let value = snapshot
-        .configs
-        .get(id.as_ref())
-        .cloned()
-        .unwrap_or(serde_json::Value::Object(Default::default()));
-    CString::new(value.to_string())
-        .map(CString::into_raw)
-        .unwrap_or(std::ptr::null_mut())
-}
-
-extern "C" fn host_free_string(value: *mut c_char) {
-    if !value.is_null() {
-        unsafe {
-            drop(CString::from_raw(value));
-        }
-    }
-}
-
-fn host_api() -> HostApi {
-    HostApi {
-        abi_version: ABI_VERSION,
-        log: Some(host_log),
-        get_config: Some(host_get_config),
-        free_string: Some(host_free_string),
-    }
-}
-
 fn extension_dir(id: &str) -> PathBuf {
     config::data_dir().join("extensions").join(id)
 }
+pub(crate) fn event_topic(id: &str) -> String {
+    format!("luo9_extension.{id}.event")
+}
+pub(crate) fn command_topic(id: &str) -> String {
+    format!("luo9_extension.{id}.command")
+}
+pub(crate) fn response_topic(id: &str) -> String {
+    format!("luo9_extension.{id}.response")
+}
 
-fn library_path(manifest: &ExtensionManifest) -> Result<PathBuf, String> {
+fn executable_path(manifest: &ExtensionManifest) -> Result<PathBuf, String> {
     let entrypoint = manifest
         .entrypoint
         .as_deref()
@@ -103,10 +49,10 @@ fn library_path(manifest: &ExtensionManifest) -> Result<PathBuf, String> {
     let path = root.join(relative);
     let canonical_root = root
         .canonicalize()
-        .map_err(|e| format!("扩展目录不可用: {e}"))?;
+        .map_err(|error| format!("扩展目录不可用: {error}"))?;
     let canonical_path = path
         .canonicalize()
-        .map_err(|e| format!("动态库不存在: {e}"))?;
+        .map_err(|error| format!("扩展程序不存在: {error}"))?;
     if !canonical_path.starts_with(&canonical_root) {
         return Err("entrypoint 越过扩展目录".to_string());
     }
@@ -117,100 +63,106 @@ pub(crate) fn start_enabled_extensions(manifests: &[ExtensionManifest]) {
     for manifest in manifests {
         if manifest.kind == Some(ExtensionKind::External) && super::enabled(&manifest.id) {
             if let Err(error) = load(manifest) {
-                warn!(id = %manifest.id, %error, "extension: 动态库加载失败");
+                warn!(id = %manifest.id, %error, "extension: 隔离进程启动失败");
             }
         }
     }
 }
 
 pub(crate) fn load(manifest: &ExtensionManifest) -> Result<(), String> {
-    if manifest.kind != Some(ExtensionKind::External) {
+    if manifest.kind != Some(ExtensionKind::External) || is_loaded(&manifest.id) {
         return Ok(());
     }
-    if is_loaded(&manifest.id) {
-        return Ok(());
-    }
-    let path = library_path(manifest)?;
-    let library = unsafe { Library::new(&path) }.map_err(|e| format!("加载动态库失败: {e}"))?;
-    let init: Init = unsafe {
-        *library
-            .get(INIT_SYMBOL)
-            .map_err(|e| format!("缺少 luo9_extension_init: {e}"))?
-    };
-    let shutdown: Shutdown = unsafe {
-        *library
-            .get(SHUTDOWN_SYMBOL)
-            .map_err(|e| format!("缺少 luo9_extension_shutdown: {e}"))?
-    };
-    let on_event = unsafe {
-        library
-            .get::<OnEvent>(EVENT_SYMBOL)
-            .ok()
-            .map(|symbol| *symbol)
-    };
-    let host = host_api();
-    let result = unsafe { init(&host) };
-    if result != 0 {
-        return Err(format!("扩展初始化失败，返回码 {result}"));
-    }
-    loaded()
+    let path = executable_path(manifest)?;
+    let event_topic = event_topic(&manifest.id);
+    let config_path = config::data_dir().join("extensions").join("config.json");
+    let child = Command::new(&path)
+        .current_dir(extension_dir(&manifest.id))
+        .env("LUO9_EXTENSION_ID", &manifest.id)
+        .env("LUO9_EXTENSION_ABI", BUS_ABI_VERSION.to_string())
+        .env("LUO9_EXTENSION_EVENT_TOPIC", &event_topic)
+        .env("LUO9_EXTENSION_COMMAND_TOPIC", command_topic(&manifest.id))
+        .env(
+            "LUO9_EXTENSION_RESPONSE_TOPIC",
+            response_topic(&manifest.id),
+        )
+        .env("LUO9_EXTENSION_CONFIG", config_path)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("启动扩展进程失败: {error}"))?;
+    let pid = child.id();
+    running()
         .lock()
-        .map_err(|_| "动态库运行时锁已中毒".to_string())?
-        .push(LoadedExtension {
+        .map_err(|_| "扩展运行时锁已中毒".to_string())?
+        .push(RunningExtension {
             id: manifest.id.clone(),
-            library,
-            shutdown,
-            on_event,
+            event_topic,
+            child,
         });
-    info!(id = %manifest.id, path = ?path, "extension: 动态库已加载");
+    info!(id = %manifest.id, pid, "extension: 隔离进程已启动");
     Ok(())
 }
 
 pub(crate) fn unload(id: &str) -> Result<(), String> {
-    let mut extensions = loaded()
+    let mut extensions = running()
         .lock()
-        .map_err(|_| "动态库运行时锁已中毒".to_string())?;
+        .map_err(|_| "扩展运行时锁已中毒".to_string())?;
     let Some(index) = extensions.iter().position(|extension| extension.id == id) else {
         return Ok(());
     };
-    let extension = extensions.remove(index);
-    unsafe {
-        (extension.shutdown)();
-    }
-    drop(extension.library);
-    info!(%id, "extension: 动态库已卸载");
+    let mut extension = extensions.remove(index);
+    let _ = extension.child.kill();
+    let _ = extension.child.wait();
+    info!(%id, "extension: 隔离进程已停止");
     Ok(())
 }
 
 pub(crate) fn is_loaded(id: &str) -> bool {
-    loaded()
-        .lock()
-        .map(|extensions| extensions.iter().any(|extension| extension.id == id))
-        .unwrap_or(false)
-}
-
-pub(crate) fn dispatch_event(json: &str) {
-    let Ok(payload) = CString::new(json) else {
-        return;
+    let Ok(mut extensions) = running().lock() else {
+        return false;
     };
-    let Ok(extensions) = loaded().lock() else {
-        return;
-    };
-    for extension in extensions.iter() {
-        if let Some(on_event) = extension.on_event {
-            let result = unsafe { on_event(payload.as_ptr()) };
-            if result != 0 {
-                warn!(id = %extension.id, result, "extension: on_event 返回错误");
+    let mut index = 0;
+    while index < extensions.len() {
+        match extensions[index].child.try_wait() {
+            Ok(Some(status)) => {
+                warn!(id = %extensions[index].id, ?status, "extension: 进程已退出");
+                extensions.remove(index);
+            }
+            Ok(None) => index += 1,
+            Err(error) => {
+                warn!(id = %extensions[index].id, %error, "extension: 进程状态检查失败");
+                index += 1;
             }
         }
     }
+    extensions.iter().any(|extension| extension.id == id)
 }
 
+pub(crate) fn dispatch_event(json: &str) {
+    let Ok(extensions) = running().lock() else {
+        return;
+    };
+    for extension in extensions.iter() {
+        if let Err(error) = Bus::topic(&extension.event_topic).publish(json) {
+            warn!(id = %extension.id, ?error, "extension: 事件发布失败");
+        }
+    }
+}
 pub(crate) fn status(id: &str) -> (&'static str, bool) {
     if is_loaded(id) {
         ("active", true)
     } else {
-        ("manifest_only", false)
+        ("stopped", false)
+    }
+}
+pub(crate) fn shutdown_all() {
+    if let Ok(mut extensions) = running().lock() {
+        for mut extension in extensions.drain(..) {
+            let _ = extension.child.kill();
+            let _ = extension.child.wait();
+        }
     }
 }
 
@@ -218,7 +170,13 @@ pub(crate) fn status(id: &str) -> (&'static str, bool) {
 mod tests {
     use super::*;
     #[test]
-    fn rejects_path_traversal_before_loading() {
+    fn topics_are_stable_and_scoped_by_extension_id() {
+        assert_eq!(event_topic("weather"), "luo9_extension.weather.event");
+        assert_eq!(command_topic("weather"), "luo9_extension.weather.command");
+        assert_eq!(response_topic("weather"), "luo9_extension.weather.response");
+    }
+    #[test]
+    fn rejects_path_traversal_before_spawning() {
         let manifest = ExtensionManifest {
             id: "demo".into(),
             name: "demo".into(),
@@ -232,8 +190,8 @@ mod tests {
             config_schema: Vec::new(),
             ui: None,
             kind: Some(ExtensionKind::External),
-            entrypoint: Some("../evil.dll".into()),
+            entrypoint: Some("../evil.exe".into()),
         };
-        assert!(library_path(&manifest).is_err());
+        assert!(executable_path(&manifest).is_err());
     }
 }
