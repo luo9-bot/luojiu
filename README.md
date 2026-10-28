@@ -346,7 +346,7 @@ auto_start_groups: []         # 自动开启群聊
 ```
 
 后端接口为 `GET /api/extensions`、`GET /api/extensions/:id` 和
-`POST /api/extensions/:id/toggle`。WebUI 只依赖这组接口，后续新增扩展类型时无需再
+`POST /api/extensions/:id/toggle`、`PUT /api/extensions/:id/config`。WebUI 只依赖这组接口，后续新增扩展类型时无需再
 修改导航外壳；扩展可声明自己的能力和管理入口。
 
 研究参考了[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)

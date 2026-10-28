@@ -21,6 +21,16 @@ pub(crate) fn handle_extensions(
             .find(|item| item.manifest.id == id)
             .map(|item| ok(serde_json::to_value(item).unwrap_or_default()))
             .unwrap_or_else(|| err(404, "extension not found")),
+        (Method::Put, Some(id)) if segs.get(1) == Some(&"config") => {
+            let value: serde_json::Value = match parse_json(body) {
+                Ok(value) => value,
+                Err(error) => return err(400, &error),
+            };
+            match crate::extension::set_config(id, value) {
+                Ok(snapshot) => ok(serde_json::to_value(snapshot).unwrap_or_default()),
+                Err(error) => err(404, &error),
+            }
+        }
         (Method::Post, Some(id)) if segs.get(1) == Some(&"toggle") => {
             let value: serde_json::Value = match parse_json(body) {
                 Ok(value) => value,

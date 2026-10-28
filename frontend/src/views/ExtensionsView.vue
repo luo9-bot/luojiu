@@ -34,6 +34,9 @@
             <h4>{{ item.name }}</h4>
             <p>{{ item.description || '暂无描述' }}</p>
             <div class="tag-row"><span v-for="tag in item.tags" :key="tag" class="tag tag-info">{{ tag }}</span></div>
+            <div v-if="item.permissions?.length" class="permission-line">权限：{{ item.permissions.join('、') }}</div>
+            <div v-if="item.requires?.length" class="permission-line">依赖：{{ item.requires.join('、') }}</div>
+            <div v-if="item.config_schema?.length" class="permission-line">可配置项：{{ item.config_schema.length }}</div>
             <div class="extension-meta">v{{ item.version }} · {{ item.author || 'Luo9' }}</div>
             <div class="extension-actions">
               <button class="btn btn-sm" :class="item.enabled ? 'btn-secondary' : 'btn-primary'" @click="toggle(item)">
@@ -132,6 +135,7 @@ h1 { margin:5px 0; font-size:26px; font-weight:500; }
 .extension-status.disabled { color:var(--text-3); background:var(--chip-solid); }
 .extension-status.manifest_only { color:var(--warning); background:var(--warning-subtle); }
 .extension-meta,.muted { color:var(--text-3); font-size:11px; }
+.permission-line { color:var(--text-3); font-size:11px; margin-top:5px; }
 .tag-row { flex-wrap:wrap; min-height:24px; }
 .market-list { display:flex; flex-direction:column; gap:8px; }
 .market-item { display:flex; justify-content:space-between; gap:16px; padding:12px; border-bottom:1px solid var(--border-light); }

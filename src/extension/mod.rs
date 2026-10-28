@@ -11,6 +11,7 @@ use crate::config;
 
 const STATE_FILE: &str = "extensions/state.json";
 const MANIFEST_DIR: &str = "extensions";
+const CONFIG_FILE: &str = "extensions/config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -34,11 +35,31 @@ pub(crate) struct ExtensionManifest {
     #[serde(default)]
     pub capabilities: Vec<String>,
     #[serde(default)]
+    pub permissions: Vec<String>,
+    #[serde(default)]
+    pub requires: Vec<String>,
+    #[serde(default)]
+    pub config_schema: Vec<ExtensionConfigField>,
+    #[serde(default)]
     pub ui: Option<ExtensionUi>,
     #[serde(default)]
     pub kind: Option<ExtensionKind>,
     #[serde(default)]
     pub entrypoint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ExtensionConfigField {
+    pub key: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub field_type: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub secret: bool,
+    #[serde(default)]
+    pub default: Option<Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,6 +87,7 @@ pub(crate) struct ExtensionRecord {
 pub(crate) struct ExtensionSnapshot {
     pub extensions: Vec<ExtensionRecord>,
     pub market: MarketSnapshot,
+    pub configs: BTreeMap<String, Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -123,6 +145,19 @@ fn persist_state(enabled: &BTreeMap<String, bool>) -> Result<(), String> {
     let raw = serde_json::to_string_pretty(enabled).map_err(|error| error.to_string())?;
     crate::util::atomic_write(&state_path(), raw).map_err(|error| error.to_string())
 }
+fn config_path() -> PathBuf {
+    config::data_dir().join(CONFIG_FILE)
+}
+fn read_configs() -> BTreeMap<String, Value> {
+    std::fs::read_to_string(config_path())
+        .ok()
+        .and_then(|raw| serde_json::from_str(&raw).ok())
+        .unwrap_or_default()
+}
+fn persist_configs(configs: &BTreeMap<String, Value>) -> Result<(), String> {
+    let raw = serde_json::to_string_pretty(configs).map_err(|error| error.to_string())?;
+    crate::util::atomic_write(config_path(), raw).map_err(|error| error.to_string())
+}
 fn builtin(
     id: &str,
     name: &str,
@@ -139,6 +174,9 @@ fn builtin(
         author: "luoy-oss".to_string(),
         tags: vec!["builtin".to_string()],
         capabilities: capabilities.iter().map(|v| (*v).to_string()).collect(),
+        permissions: Vec::new(),
+        requires: Vec::new(),
+        config_schema: Vec::new(),
         ui: Some(ExtensionUi {
             route: format!("builtin:{id}"),
             icon: String::new(),
@@ -276,6 +314,7 @@ pub(crate) fn snapshot() -> ExtensionSnapshot {
     ExtensionSnapshot {
         extensions,
         market: market_snapshot(),
+        configs: read_configs(),
     }
 }
 pub(crate) fn enabled(id: &str) -> bool {
@@ -296,6 +335,20 @@ pub(crate) fn set_enabled(id: &str, value: bool) -> Result<ExtensionSnapshot, St
     state.enabled.insert(id.to_string(), value);
     persist_state(&state.enabled)?;
     drop(state);
+    Ok(snapshot())
+}
+
+pub(crate) fn set_config(id: &str, value: Value) -> Result<ExtensionSnapshot, String> {
+    if !snapshot()
+        .extensions
+        .iter()
+        .any(|extension| extension.manifest.id == id)
+    {
+        return Err(format!("未知扩展: {id}"));
+    }
+    let mut configs = read_configs();
+    configs.insert(id.to_string(), value);
+    persist_configs(&configs)?;
     Ok(snapshot())
 }
 fn market_snapshot() -> MarketSnapshot {

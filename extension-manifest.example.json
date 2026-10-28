@@ -6,6 +6,16 @@
   "author": "your-name",
   "tags": ["utility", "weather"],
   "capabilities": ["tool.weather", "message.reply"],
+  "permissions": ["network.http"],
+  "requires": [],
+  "config_schema": [
+    {
+      "key": "city",
+      "label": "默认城市",
+      "type": "string",
+      "description": "天气查询的默认城市"
+    }
+  ],
   "ui": {
     "route": "external:example.weather",
     "icon": "cloud",
