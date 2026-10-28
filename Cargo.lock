@@ -880,6 +880,7 @@ dependencies = [
  "base64",
  "fastrand",
  "image",
+ "libloading",
  "luo9_sdk",
  "rand 0.8.6",
  "regex",

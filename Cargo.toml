@@ -35,4 +35,5 @@ aho-corasick = "1"
 base64 = "0.22.1"
 image = { version = "0.25", features = ["gif", "png"] }
 rusqlite = { version = "0.32", features = ["bundled"] }
+libloading = "0.9"
 

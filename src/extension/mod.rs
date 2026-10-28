@@ -9,6 +9,8 @@ use tracing::{info, warn};
 
 use crate::config;
 
+mod runtime;
+
 const STATE_FILE: &str = "extensions/state.json";
 const MANIFEST_DIR: &str = "extensions";
 const CONFIG_FILE: &str = "extensions/config.json";
@@ -272,13 +274,18 @@ fn load_external_manifests() -> Vec<ExtensionManifest> {
 fn record(manifest: ExtensionManifest, enabled: bool, source: &str) -> ExtensionRecord {
     let external =
         manifest.kind.clone().unwrap_or(ExtensionKind::Builtin) == ExtensionKind::External;
+    let (runtime_status, runtime_healthy) = if external {
+        runtime::status(&manifest.id)
+    } else {
+        ("active", true)
+    };
     ExtensionRecord {
         manifest,
         enabled,
-        healthy: !external,
+        healthy: if external { runtime_healthy } else { true },
         source: source.to_string(),
         status: if external {
-            "manifest_only"
+            runtime_status
         } else if enabled {
             "active"
         } else {
@@ -289,6 +296,7 @@ fn record(manifest: ExtensionManifest, enabled: bool, source: &str) -> Extension
 }
 pub(crate) fn initialize() {
     let _ = state();
+    runtime::start_enabled_extensions(&load_external_manifests());
     info!(
         count = load_external_manifests().len(),
         "extension: registry initialized"
@@ -323,6 +331,10 @@ pub(crate) fn enabled(id: &str) -> bool {
         .map(|s| s.enabled.get(id).copied().unwrap_or(true))
         .unwrap_or(true)
 }
+
+pub(crate) fn dispatch_event(json: &str) {
+    runtime::dispatch_event(json);
+}
 pub(crate) fn set_enabled(id: &str, value: bool) -> Result<ExtensionSnapshot, String> {
     if !builtin_manifests().iter().any(|m| m.id == id)
         && !load_external_manifests().iter().any(|m| m.id == id)
@@ -335,6 +347,16 @@ pub(crate) fn set_enabled(id: &str, value: bool) -> Result<ExtensionSnapshot, St
     state.enabled.insert(id.to_string(), value);
     persist_state(&state.enabled)?;
     drop(state);
+    if let Some(manifest) = load_external_manifests()
+        .into_iter()
+        .find(|manifest| manifest.id == id)
+    {
+        if value {
+            runtime::load(&manifest)?;
+        } else {
+            runtime::unload(id)?;
+        }
+    }
     Ok(snapshot())
 }
 

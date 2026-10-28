@@ -328,6 +328,32 @@ auto_start_groups: []         # 自动开启群聊
 状态持久化和管理端接入；外部代码运行时会显示为“仅清单”，不会被当作可执行插件加载。
 这样可以先稳定扩展协议，再接入 WASI 或动态库运行时，避免扩展安装和执行耦合在 WebUI 里。
 
+### 动态库 ABI
+
+外部动态库必须放在对应扩展目录内，并由 manifest 的 `entrypoint` 指定相对路径。
+当前 ABI 版本为 `1`，必须导出以下 C ABI 符号：
+
+```text
+luo9_extension_init(*const HostApi) -> i32
+luo9_extension_shutdown() -> ()
+luo9_extension_on_event(*const c_char) -> i32   # 可选
+```
+
+`HostApi` 提供 ABI 版本、日志回调、读取扩展配置和释放字符串回调。事件回调收到
+JSON 字符串，目前包含 `luo9_message` 消息事件。宿主会校验 entrypoint 不得越出扩展
+目录，初始化失败不会影响核心消息循环；扩展会在 WebUI 中显示为 unhealthy。启停
+扩展时会实时加载或卸载库，卸载前调用 shutdown。
+
+可直接参考 [extension-abi/luo9_extension.h](extension-abi/luo9_extension.h) 和
+[extension-abi/example.c](extension-abi/example.c)。扩展目录需要包含自己的
+`manifest.json` 和编译产物，例如：
+
+```text
+data/plugin_ai_chat/extensions/example.weather/
+├── manifest.json
+└── plugin.dll      # Linux 使用 plugin.so，macOS 使用 plugin.dylib
+```
+
 市场目录通过 `LUO9_EXTENSION_MARKET_URL` 配置，接口应返回 `MarketEntry[]` JSON 数组：
 
 ```json

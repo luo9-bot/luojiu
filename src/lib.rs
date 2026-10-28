@@ -462,6 +462,7 @@ pub extern "C" fn plugin_main() {
         if let Some(json) = msg_topic.pop(msg_sub)
             && let Some(BusPayload::Message(msg)) = BusPayload::parse(&json)
         {
+            extension::dispatch_event(&json);
             match msg.message_type {
                 MsgType::Group => {
                     conversation::handle_group_msg(
