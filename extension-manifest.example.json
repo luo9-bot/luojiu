@@ -1,0 +1,16 @@
+{
+  "id": "example.weather",
+  "name": "天气扩展",
+  "description": "给对话提供天气查询能力",
+  "version": "0.1.0",
+  "author": "your-name",
+  "tags": ["utility", "weather"],
+  "capabilities": ["tool.weather", "message.reply"],
+  "ui": {
+    "route": "external:example.weather",
+    "icon": "cloud",
+    "group": "extensions",
+    "order": 100
+  },
+  "entrypoint": "plugin.dll"
+}

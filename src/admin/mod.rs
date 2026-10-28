@@ -200,6 +200,7 @@ fn route(request: &mut Request) -> Response<std::io::Cursor<Vec<u8>>> {
         Some(&"memory-ops-log") => handlers::handle_memory_ops_log(&method, &api_segs[1..]),
         Some(&"relationships") => handlers::handle_relationships(&method, &api_segs[1..]),
         Some(&"version") => ok(serde_json::json!({"version": env!("CARGO_PKG_VERSION")})),
+        Some(&"extensions") => handlers::handle_extensions(&method, &api_segs[1..], &body),
         _ => err(404, "not found"),
     }
 }

@@ -6,6 +6,38 @@ use crate::config;
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
+pub(crate) fn handle_extensions(
+    method: &Method,
+    segs: &[&str],
+    body: &[u8],
+) -> Response<std::io::Cursor<Vec<u8>>> {
+    match (method, segs.first().copied()) {
+        (Method::Get, None) => {
+            ok(serde_json::to_value(crate::extension::snapshot()).unwrap_or_default())
+        }
+        (Method::Get, Some(id)) => crate::extension::snapshot()
+            .extensions
+            .into_iter()
+            .find(|item| item.manifest.id == id)
+            .map(|item| ok(serde_json::to_value(item).unwrap_or_default()))
+            .unwrap_or_else(|| err(404, "extension not found")),
+        (Method::Post, Some(id)) if segs.get(1) == Some(&"toggle") => {
+            let value: serde_json::Value = match parse_json(body) {
+                Ok(value) => value,
+                Err(error) => return err(400, &error),
+            };
+            let Some(enabled) = value.get("enabled").and_then(|value| value.as_bool()) else {
+                return err(400, "enabled must be boolean");
+            };
+            match crate::extension::set_enabled(id, enabled) {
+                Ok(snapshot) => ok(serde_json::to_value(snapshot).unwrap_or_default()),
+                Err(error) => err(404, &error),
+            }
+        }
+        _ => err(405, "method not allowed"),
+    }
+}
+
 static PENDING_RESTART: OnceLock<Mutex<BTreeMap<String, String>>> = OnceLock::new();
 static STARTUP_CONFIG: OnceLock<serde_json::Value> = OnceLock::new();
 

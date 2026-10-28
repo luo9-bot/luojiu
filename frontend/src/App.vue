@@ -86,6 +86,7 @@ import SecurityView from './views/SecurityView.vue'
 import SocialView from './views/SocialView.vue'
 import DashboardView from './views/DashboardView.vue'
 import ConfigView from './views/ConfigView.vue'
+import ExtensionsView from './views/ExtensionsView.vue'
 import PromptsView from './views/PromptsView.vue'
 import ConversationsView from './views/ConversationsView.vue'
 import QuotaView from './views/QuotaView.vue'
@@ -152,6 +153,7 @@ const tabs = [
   { id: 'growth-lab', name: '成长观测', group: '实验', icon: I.analytics, desc: '行为基线、门控统计与覆盖范围', comp: GrowthLabView },
   { id: 'schedule', name: '日程计划', group: '管理', icon: I.schedule, desc: '周/月计划管理', comp: ScheduleView },
   { id: 'config', name: '配置', group: '管理', icon: I.config, desc: 'Bot 与 AI 参数', comp: ConfigView },
+  { id: 'extensions', name: '扩展中心', group: '管理', icon: I.config, desc: '内置能力、外部扩展与市场目录', comp: ExtensionsView },
   { id: 'prompts', name: 'Prompt 管理', group: '管理', icon: I.config, desc: '编辑与热加载提示词', comp: PromptsView },
   { id: 'conversations', name: '对话管理', group: '管理', icon: I.conversations, desc: '活跃会话控制', comp: ConversationsView },
   { id: 'quota', name: '配额', group: '管理', icon: I.quota, desc: '回复配额', comp: QuotaView },

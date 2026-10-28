@@ -33,6 +33,7 @@ pub(crate) mod cron;
 pub(crate) mod db;
 pub(crate) mod emoji;
 pub(crate) mod emotion;
+pub(crate) mod extension;
 pub(crate) mod learner;
 pub(crate) mod memory;
 pub(crate) mod mind;
@@ -304,6 +305,8 @@ pub extern "C" fn plugin_main() {
         .init();
 
     config::init();
+    extension::initialize();
+    extension::initialize();
     // Growth Lab Phase A is initialized before live message processing; it only records telemetry.
     mind::growth_lab::init();
     debug!(model = %config::get().model, "plugin loaded");

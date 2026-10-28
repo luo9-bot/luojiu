@@ -160,6 +160,17 @@ pub(crate) fn get_bytes_limited(url: &str, max_bytes: usize) -> Result<Vec<u8>, 
         .map_err(|error| HttpError::Body(Box::new(error)))
 }
 
+/// 读取小型文本资源，例如扩展市场目录。
+pub(crate) fn get_text(url: &str) -> Result<String, HttpError> {
+    agent(AgentSpec::reading_error_body(IMAGE_DOWNLOAD_TIMEOUT_SECS))
+        .get(url)
+        .call()
+        .map_err(|error| HttpError::Transport(Box::new(error)))?
+        .into_body()
+        .read_to_string()
+        .map_err(|error| HttpError::Body(Box::new(error)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

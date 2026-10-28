@@ -274,6 +274,9 @@ fn prepare_image(source: &str, settings: &VisionSettings) -> Result<String, VlmE
 
 /// 所有识图、表情包描述和表情包选择共用此调用路径。
 pub(crate) fn call_vlm(images: &[&str], prompt: &str, max_tokens: u32) -> Result<String, VlmError> {
+    if !crate::extension::enabled("core.vision") {
+        return Err(VlmError::Provider("视觉扩展已停用".into()));
+    }
     let cfg = config::get();
     let settings = resolve_settings(&cfg.vision, &cfg.base_url, &cfg.api_key, &cfg.model);
     if !cfg.vision.enabled() || settings.api_key.is_empty() {
@@ -388,6 +391,9 @@ fn extract_vlm_text(body: &str) -> Option<String> {
 }
 
 pub(crate) fn recognize(image_url: &str) -> Option<String> {
+    if !crate::extension::enabled("core.vision") {
+        return None;
+    }
     let cfg = config::get();
     if !cfg.vision.enabled() {
         return None;

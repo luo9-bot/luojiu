@@ -317,6 +317,38 @@ auto_start_groups: []         # 自动开启群聊
 需在 NapCat 启用 `enableLocalFile2Url` 以返回 Base64，或提供插件可访问的 URL。
 图片描述继续经过现有防注入检查，并沿用现有记忆和表情包缓存流程。
 
+## 扩展中心
+
+插件内置扩展注册表，所有可管理能力都用 manifest 描述。当前内置能力包括对话核心、
+视觉理解、长期记忆、表情包、安全滤壳、人性化行为和管理控制台。管理页面的“扩展中心”
+会显示这些能力的版本、能力声明、健康状态和启停状态。
+
+外部扩展放在运行时数据目录的 `extensions/<extension-id>/manifest.json`。清单格式见
+[extension-manifest.example.json](extension-manifest.example.json)。当前版本先完成清单发现、
+状态持久化和管理端接入；外部代码运行时会显示为“仅清单”，不会被当作可执行插件加载。
+这样可以先稳定扩展协议，再接入 WASI 或动态库运行时，避免扩展安装和执行耦合在 WebUI 里。
+
+市场目录通过 `LUO9_EXTENSION_MARKET_URL` 配置，接口应返回 `MarketEntry[]` JSON 数组：
+
+```json
+[
+  {
+    "id": "weather",
+    "name": "天气",
+    "description": "天气查询扩展",
+    "version": "1.0.0",
+    "author": "luo9-community",
+    "tags": ["utility"],
+    "download_url": "https://example.invalid/weather.zip",
+    "homepage": "https://example.invalid/weather"
+  }
+]
+```
+
+后端接口为 `GET /api/extensions`、`GET /api/extensions/:id` 和
+`POST /api/extensions/:id/toggle`。WebUI 只依赖这组接口，后续新增扩展类型时无需再
+修改导航外壳；扩展可声明自己的能力和管理入口。
+
 研究参考了[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)
 的资源加载、内容格式判断和统一视觉调用方式。
 
