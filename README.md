@@ -317,9 +317,7 @@ auto_start_groups: []         # 自动开启群聊
 需在 NapCat 启用 `enableLocalFile2Url` 以返回 Base64，或提供插件可访问的 URL。
 图片描述继续经过现有防注入检查，并沿用现有记忆和表情包缓存流程。
 
-本地构建使用相邻的 `../luo9_sdk_rust`，SDK 版本为 `0.8.0-beta.4`，应与
-`luo9_bot 0.1.0-beta.14` 一起更新。研究参考了
-[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)
+研究参考了[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)
 的资源加载、内容格式判断和统一视觉调用方式。
 
 ## 免责声明
@@ -384,3 +382,4 @@ auto_start_groups: []         # 自动开启群聊
 ---
 
 **最后更新：2026年5月25日**
+
