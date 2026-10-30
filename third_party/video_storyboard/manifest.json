@@ -1,0 +1,46 @@
+{
+  "id": "third_party.video_storyboard",
+  "name": "视频功能插件",
+  "description": "短视频阅后即焚分析与 Bilibili 直播动态跟踪",
+  "version": "0.1.0",
+  "author": "luoy-oss",
+  "tags": ["third_party", "video", "bilibili"],
+  "capabilities": ["video.analyze", "video.ephemeral", "bilibili.live"],
+  "permissions": ["network.http", "process.ffmpeg", "message.reply"],
+  "requires": ["ffmpeg", "ffprobe"],
+  "tools": [
+    {
+      "name": "video_analyze",
+      "description": "读取本地、HTTP(S) 或 CQ:video 视频，限制最长 15 秒，抽取关键帧后阅后即焚分析。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {"type": "string", "description": "本地路径、URL 或完整 CQ:video 消息"},
+          "prompt": {"type": "string", "description": "希望重点观察的内容，可留空"}
+        },
+        "required": ["source"]
+      }
+    },
+    {
+      "name": "bilibili_live",
+      "description": "读取 Bilibili 直播页并跟踪动态。action: inspect、track、poll、untrack。",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "action": {"type": "string", "enum": ["inspect", "track", "poll", "untrack"]},
+          "url": {"type": "string", "description": "直播页 URL；untrack 时可传 room_id"}
+        },
+        "required": ["action"]
+      }
+    }
+  ],
+  "ui": {
+    "route": "external:third_party.video_storyboard",
+    "icon": "video",
+    "group": "third_party",
+    "order": 100
+  },
+  "kind": "external",
+  "entrypoint": "luo9-video-storyboard.exe"
+}
+

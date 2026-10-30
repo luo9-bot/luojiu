@@ -265,6 +265,7 @@ fn voice_tools() -> Vec<Tool> {
         plan_next_tool(),
     ];
     tools.extend(plan_tools());
+    tools.extend(crate::extension::tool_defs());
     if config::get().search.enabled {
         tools.push(search_web_tool());
     }
@@ -450,6 +451,9 @@ fn execute_tool(
     present_users: &[u64],
     transcript_tail: &[String],
 ) -> ToolOutcome {
+    if let Some(outcome) = crate::extension::execute_tool(name, args, group_id, primary_user_id) {
+        return outcome;
+    }
     if let Some(outcome) = execute_plan_tool(name, args) {
         return outcome;
     }

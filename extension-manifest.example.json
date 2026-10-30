@@ -16,6 +16,17 @@
       "description": "天气查询的默认城市"
     }
   ],
+  "tools": [
+    {
+      "name": "weather",
+      "description": "查询天气",
+      "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"]
+      }
+    }
+  ],
   "ui": {
     "route": "external:example.weather",
     "icon": "cloud",

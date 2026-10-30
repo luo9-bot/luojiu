@@ -48,6 +48,16 @@ pub(crate) struct ExtensionManifest {
     pub kind: Option<ExtensionKind>,
     #[serde(default)]
     pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<ExtensionTool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ExtensionTool {
+    pub name: String,
+    pub description: String,
+    #[serde(default)]
+    pub parameters: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -187,6 +197,7 @@ fn builtin(
         }),
         kind: Some(ExtensionKind::Builtin),
         entrypoint: None,
+        tools: Vec::new(),
     }
 }
 pub(crate) fn builtin_manifests() -> Vec<ExtensionManifest> {
@@ -337,6 +348,48 @@ pub(crate) fn enabled(id: &str) -> bool {
         .read()
         .map(|s| s.enabled.get(id).copied().unwrap_or(true))
         .unwrap_or(true)
+}
+
+pub(crate) fn tool_defs() -> Vec<crate::ai::Tool> {
+    load_external_manifests()
+        .into_iter()
+        .filter(|manifest| enabled(&manifest.id) && runtime::is_loaded(&manifest.id))
+        .flat_map(|manifest| {
+            manifest.tools.into_iter().map(|tool| crate::ai::Tool {
+                tool_type: "function".to_string(),
+                function: crate::ai::FunctionDef {
+                    name: tool.name,
+                    description: tool.description,
+                    parameters: tool.parameters,
+                },
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn execute_tool(
+    name: &str,
+    args: &Value,
+    group_id: u64,
+    user_id: u64,
+) -> Option<crate::ai::ToolOutcome> {
+    let manifest = load_external_manifests().into_iter().find(|manifest| {
+        enabled(&manifest.id)
+            && manifest.tools.iter().any(|tool| tool.name == name)
+            && runtime::is_loaded(&manifest.id)
+    })?;
+    let request = serde_json::json!({
+        "tool": name,
+        "arguments": args,
+        "context": {"group_id": group_id, "user_id": user_id}
+    });
+    Some(match runtime::call(&manifest.id, &request) {
+        Ok(result) => crate::ai::ToolOutcome::Continue(result),
+        Err(error) => crate::ai::ToolOutcome::Continue(format!(
+            "第三方扩展 {} 执行失败：{}",
+            manifest.name, error
+        )),
+    })
 }
 
 pub(crate) fn dispatch_event(json: &str) {

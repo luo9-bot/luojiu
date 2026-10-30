@@ -324,9 +324,8 @@ auto_start_groups: []         # 自动开启群聊
 会显示这些能力的版本、能力声明、健康状态和启停状态。
 
 外部扩展放在运行时数据目录的 `extensions/<extension-id>/manifest.json`。清单格式见
-[extension-manifest.example.json](extension-manifest.example.json)。当前版本先完成清单发现、
-状态持久化和管理端接入；外部代码运行时会显示为“仅清单”，不会被当作可执行插件加载。
-这样可以先稳定扩展协议，再接入 WASI 或动态库运行时，避免扩展安装和执行耦合在 WebUI 里。
+[extension-manifest.example.json](extension-manifest.example.json)。宿主会发现清单、持久化启停状态，
+并把启用的外部进程作为隔离扩展加载；扩展工具通过 manifest 声明、Bus 请求/响应执行。
 
 ### 隔离式扩展进程与 Bus 协议
 
@@ -373,6 +372,29 @@ data/plugin_ai_chat/extensions/example.weather/
 后端接口为 `GET /api/extensions`、`GET /api/extensions/:id` 和
 `POST /api/extensions/:id/toggle`、`PUT /api/extensions/:id/config`。WebUI 只依赖这组接口，后续新增扩展类型时无需再
 修改导航外壳；扩展可声明自己的能力和管理入口。
+
+### 视频第三方扩展
+
+视频能力位于独立的 `third_party/video_storyboard` 进程扩展，不会编译进核心对话库。
+宿主只通过 manifest 注册工具、启动隔离进程，并使用 Bus 转发工具请求和消息事件。
+
+构建：
+
+```powershell
+cargo build --release --manifest-path third_party/video_storyboard/Cargo.toml
+```
+
+将 `third_party/video_storyboard/manifest.json` 和生成的可执行文件放入运行时目录：
+
+```text
+data/plugin_ai_chat/extensions/third_party.video_storyboard/
+├── manifest.json
+└── luo9-video-storyboard.exe
+```
+
+扩展提供 `video_analyze` 与 `bilibili_live` 工具。视频限制为最多 15 秒、最多 8 张
+关键帧，分析完成后删除临时文件；需要系统 PATH 中存在 `ffmpeg` 和 `ffprobe`。Bilibili
+跟踪只读取页面元数据，并把变化通知发送回登记跟踪的会话。
 
 研究参考了[dsh-qqbot 的视觉工具](https://github.com/tencent-connect/dsh-qqbot/blob/main/src/media/vision-tool.ts)
 的资源加载、内容格式判断和统一视觉调用方式。

@@ -5,7 +5,11 @@ use crate::config;
 use luo9_sdk::bus::Bus;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{
+    Mutex, OnceLock,
+    atomic::{AtomicU64, Ordering},
+};
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
 pub(super) const BUS_ABI_VERSION: u32 = 1;
@@ -16,6 +20,7 @@ struct RunningExtension {
     child: Child,
 }
 static RUNNING: OnceLock<Mutex<Vec<RunningExtension>>> = OnceLock::new();
+static REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 fn running() -> &'static Mutex<Vec<RunningExtension>> {
     RUNNING.get_or_init(|| Mutex::new(Vec::new()))
 }
@@ -30,6 +35,59 @@ pub(crate) fn command_topic(id: &str) -> String {
 }
 pub(crate) fn response_topic(id: &str) -> String {
     format!("luo9_extension.{id}.response")
+}
+
+pub(crate) fn call(id: &str, payload: &serde_json::Value) -> Result<String, String> {
+    if !is_loaded(id) {
+        return Err("扩展进程未运行".to_string());
+    }
+    let response_topic = response_topic(id);
+    let subscriber = Bus::topic(&response_topic)
+        .subscribe_independent()
+        .map_err(|error| format!("订阅扩展响应失败：{error:?}"))?;
+    let request_id = format!(
+        "{}-{}",
+        std::process::id(),
+        REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let command = serde_json::json!({"request_id": request_id, "payload": payload});
+    let publish_result = Bus::topic(&command_topic(id))
+        .publish(&command.to_string())
+        .map_err(|error| format!("发送扩展命令失败：{error:?}"));
+    if let Err(error) = publish_result {
+        let _ = Bus::topic(&response_topic).unsubscribe(subscriber);
+        return Err(error);
+    }
+
+    let started = Instant::now();
+    let result = loop {
+        if started.elapsed() >= Duration::from_secs(20) {
+            break Err("扩展响应超时".to_string());
+        }
+        if let Some(raw) = Bus::topic(&response_topic).pop(subscriber) {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if value.get("request_id").and_then(|v| v.as_str()) != Some(&request_id) {
+                continue;
+            }
+            if value.get("ok").and_then(|v| v.as_bool()) == Some(true) {
+                break Ok(value
+                    .get("result")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string());
+            }
+            break Err(value
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("扩展返回未知错误")
+                .to_string());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    let _ = Bus::topic(&response_topic).unsubscribe(subscriber);
+    result
 }
 
 fn executable_path(manifest: &ExtensionManifest) -> Result<PathBuf, String> {
@@ -47,10 +105,17 @@ fn executable_path(manifest: &ExtensionManifest) -> Result<PathBuf, String> {
     }
     let root = extension_dir(&manifest.id);
     let path = root.join(relative);
+    let fallback_path = if !path.is_file()
+        && path.extension().and_then(|extension| extension.to_str()) == Some("exe")
+    {
+        path.with_extension("")
+    } else {
+        path.clone()
+    };
     let canonical_root = root
         .canonicalize()
         .map_err(|error| format!("扩展目录不可用: {error}"))?;
-    let canonical_path = path
+    let canonical_path = fallback_path
         .canonicalize()
         .map_err(|error| format!("扩展程序不存在: {error}"))?;
     if !canonical_path.starts_with(&canonical_root) {
@@ -87,6 +152,9 @@ pub(crate) fn load(manifest: &ExtensionManifest) -> Result<(), String> {
             response_topic(&manifest.id),
         )
         .env("LUO9_EXTENSION_CONFIG", config_path)
+        .env("LUO9_AI_API_KEY", config::get().api_key)
+        .env("LUO9_AI_BASE_URL", config::get().base_url)
+        .env("LUO9_AI_MODEL", config::get().model)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -191,6 +259,7 @@ mod tests {
             ui: None,
             kind: Some(ExtensionKind::External),
             entrypoint: Some("../evil.exe".into()),
+            tools: Vec::new(),
         };
         assert!(executable_path(&manifest).is_err());
     }
